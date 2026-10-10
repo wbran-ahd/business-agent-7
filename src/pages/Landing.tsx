@@ -13,8 +13,8 @@
  *   • `useVoiceAssistant`  conversation state machine with timeouts & mutex
  *   • `useSync`            versioned cloud backup, settings and AI status
  *   • `Modal`              accessible dialogs (Escape, focus trap, ARIA)
- */
-import { Modal } from "@/components/sauti/Modal";
+ */import {
+  Modal } from "@/components/sauti/Modal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { api } from "@/convex/_generated/api";
 import { useKhata } from "@/hooks/use-khata";
@@ -36,9 +36,12 @@ import {
   type EntryType,
 } from "@/lib/khata";
 import { t } from "@/lib/i18n";
+import { validateAmount } from "@/lib/khata";
 import { logError } from "@/lib/logger";
 import { useAction } from "convex/react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useNotifications } from "@/lib/notifications";
+import { ConfirmDialog } from "@/lib/confirm";
 
 /** Chart.js is only needed once the analytics modal is opened. */
 const ChartsPanel = lazy(() => import("@/components/sauti/ChartsPanel"));
@@ -59,6 +62,7 @@ export default function SautiBaqaya() {
   const [historyType, setHistoryType] = useState<EntryType | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [uploadConfirmOpen, setUploadConfirmOpen] = useState(false);
   const [notepadQuery, setNotepadQuery] = useState("");
   const [notepadCategory, setNotepadCategory] = useState("all");
   const [manualOpen, setManualOpen] = useState(false);
@@ -72,6 +76,7 @@ export default function SautiBaqaya() {
   const [aiError, setAiError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { notifySuccess, notifyDanger, notifyWarning, safeStatusMessage } = useNotifications();
 
   /* ---- AI -------------------------------------------------------------- */
   async function runAi(question?: string) {
@@ -307,7 +312,12 @@ export default function SautiBaqaya() {
       sync.setStatus("پہلے سائن ان کریں تاکہ ڈیٹا کلاؤڈ پر محفوظ ہو۔");
       return;
     }
-    await sync.upload();
+    const ok = await sync.upload();
+    if (ok) {
+      notifySuccess("کلاؤڈ سینک محفوظ ہو گئی", sync.status);
+    } else {
+      notifyWarning("سینک مکمل نہیں ہو سکی", sync.status);
+    }
   }
 
   function handleDownload() {
@@ -1060,8 +1070,8 @@ export default function SautiBaqaya() {
           {sync.isAuthenticated ? (
             <div className="flex gap-2">
               <button
-                onClick={() => void handleUpload()}
-                disabled={sync.busy}
+                onClick={() => setUploadConfirmOpen(true)}
+                disabled={sync.busy || !sync.isAuthenticated}
                 className={`${smallBtn} flex-1 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border-sky-500/40 disabled:opacity-50`}
               >
                 <i className="fas fa-cloud-arrow-up"></i> اپ لوڈ
@@ -1091,6 +1101,17 @@ export default function SautiBaqaya() {
           <p className="text-[11px] text-white/40 mt-2">ورژن: {sync.cloudVersion}</p>
           {sync.status && <p className="text-[11px] text-white/60 mt-1">{sync.status}</p>}
         </div>
+
+        <ConfirmDialog
+          open={uploadConfirmOpen}
+          onOpenChange={setUploadConfirmOpen}
+          title="کلاؤڈ اپ لوڈ جانچ کریں"
+          description="یہ آپ کے موجودہ مقامی ریکارڈوں کو کلاؤڈ والے حصے کے ساتھ ہم آہنگ کرے گا۔ اگر کلاؤڈ پر جدید ڈیٹا موجود ہے تو پہلے ڈاؤن لوڈ کریں۔"
+          actionLabel="اپ لوڈ کریں"
+          onConfirm={handleUpload}
+          variant="default"
+          loading={sync.busy}
+        />
       </Modal>
     </div>
   );

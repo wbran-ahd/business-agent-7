@@ -116,7 +116,7 @@
    صوتی بقیہ (Sauti Baqaya) — Voice Finance Assistant styles
    ============================================================ */
 .sauti-app {
-  font-family: "Noto Nastaliq Urdu", serif;
+  font-family: "Noto Nastaliq Urdu", "Noto Naskh Arabic", "Noto Serif Arabic", "Segoe UI", "Arial", serif;
   background-color: #0f172a;
   color: #f3f4f6;
   overflow-x: hidden;

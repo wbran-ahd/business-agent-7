@@ -65,6 +65,9 @@ export function useSync(data: DataState) {
   const [hasCloudKey, setHasCloudKey] = useState(false);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lastUploadedAt, setLastUploadedAt] = useState<number | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [lastSyncConflict, setLastSyncConflict] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
@@ -122,9 +125,12 @@ export function useSync(data: DataState) {
       ];
       const result = await syncRecords({ records, baseVersion: cloud?.version ?? 0 });
       if (result.conflict) {
+        setLastSyncConflict(true);
         setStatus(`کلاؤڈ پر نیا ڈیٹا موجود ہے (ورژن ${result.version}) — پہلے ڈاؤن لوڈ کریں۔`);
         return false;
       }
+      setLastSyncConflict(false);
+      setLastUploadedAt(Date.now());
       setStatus(`${result.synced} انٹریز کلاؤڈ پر محفوظ ہو گئیں۔`);
       return true;
     } catch (error) {
@@ -142,9 +148,9 @@ export function useSync(data: DataState) {
       return null;
     }
     const income = toEntries(cloud.records, "income");
-    const expense = toEntries(cloud.records, "expense");
-    setStatus(`کلاؤڈ سے ${income.length + expense.length} انٹریز واپس آ گئیں۔`);
-    return { income, expense };
+    const expense = toEntries(cloud.records, "expense");      setStatus(`کلاؤڈ سے ${income.length + expense.length} انٹریز واپس آ گئیں۔`);
+      setLastSyncedAt(Date.now());
+      return { income, expense };
   }, [cloud]);
 
   const persistSettings = useCallback(async () => {
