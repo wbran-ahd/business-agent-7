@@ -112,6 +112,121 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ============================================================
+   صوتی بقیہ (Sauti Baqaya) — Voice Finance Assistant styles
+   ============================================================ */
+.sauti-app {
+  font-family: "Noto Nastaliq Urdu", serif;
+  background-color: #0f172a;
+  color: #f3f4f6;
+  overflow-x: hidden;
+  position: relative;
+  /* Own stacking context so the negative-z ambient mesh stays visible */
+  isolation: isolate;
+}
+
+/* Ambient Mesh Gradient Background */
+.sauti-app .ambient-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background:
+    radial-gradient(circle at 10% 10%, #6c859b 0%, transparent 50%),
+    radial-gradient(circle at 90% 90%, #e16c4d 0%, transparent 60%),
+    radial-gradient(circle at 20% 90%, #221724 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, #4a6fa5 0%, transparent 50%);
+  background-size: cover;
+  z-index: -2;
+  filter: blur(35px);
+  pointer-events: none;
+}
+
+/* Glassmorphism Main Panel */
+.sauti-app .glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(36px);
+  -webkit-backdrop-filter: blur(36px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 32px;
+  box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.4);
+}
+
+/* Notepad Style Paper inside Modal */
+.sauti-app .notepad-paper {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+/* Horizon Arc Canvas Visualizer */
+.sauti-app #horizon-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  height: 160px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Glowing Mic Button */
+.sauti-app .mic-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(15px);
+  transition: all 0.3s ease;
+}
+.sauti-app .mic-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(1.05);
+}
+.sauti-app .mic-btn.listening {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: rgba(14, 165, 233, 0.6);
+  box-shadow: 0 0 40px rgba(14, 165, 233, 0.5);
+  animation: sauti-pulse 1.5s infinite;
+}
+
+@keyframes sauti-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Modal Dialogs */
+.sauti-app .modal {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(16px);
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Scrollbar styling */
+.sauti-app ::-webkit-scrollbar {
+  width: 4px;
+}
+.sauti-app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sauti-app ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
