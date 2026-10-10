@@ -34,10 +34,45 @@ const schema = defineSchema(
 
     // add other tables here
 
-    // tableName: defineTable({
-    //   ...
-    //   // table fields
-    // }).index("by_field", ["field"])
+    /**
+     * Cloud backup of صوتی بقیہ ledger entries. One row per income/expense
+     * record so the khata survives across devices and browser clears.
+     */
+    records: defineTable({
+      userId: v.id("users"),
+      localId: v.number(),
+      kind: v.union(v.literal("income"), v.literal("expense")),
+      amount: v.number(),
+      detail: v.string(),
+      category: v.string(),
+      icon: v.string(),
+      monthKey: v.string(),
+      date: v.string(),
+      time: v.string(),
+      timestamp: v.number(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_local", ["userId", "localId"]),
+
+    /** Per-user assistant settings: budgets, recurring incomes, AI key. */
+    userSettings: defineTable({
+      userId: v.id("users"),
+      budgets: v.optional(
+        v.array(v.object({ category: v.string(), limit: v.number() })),
+      ),
+      recurring: v.optional(
+        v.array(
+          v.object({
+            id: v.string(),
+            label: v.string(),
+            amount: v.number(),
+            enabled: v.boolean(),
+          }),
+        ),
+      ),
+      /** Gemini API key supplied by the user inside the app (never returned). */
+      geminiKey: v.optional(v.string()),
+    }).index("by_user", ["userId"])
   },
   {
     schemaValidation: false,
