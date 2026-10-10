@@ -125,6 +125,43 @@
   isolation: isolate;
 }
 
+/* Type helpers. `.sauti-app` sets Nastaliq across the whole tree; these rules
+   are declared after it (same specificity) so a section can opt in or out —
+   the landing page body copy uses `.sans`, Urdu display text uses `.nastaliq`. */
+.sans {
+  /* Latin glyphs get the UI font; Urdu glyphs fall through to the loaded
+     Nastaliq webfont instead of relying on a system-installed Arabic font. */
+  font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system,
+    "Noto Nastaliq Urdu", "Noto Naskh Arabic", sans-serif;
+}
+
+.nastaliq {
+  font-family: "Noto Nastaliq Urdu", "Noto Naskh Arabic", "Noto Serif Arabic", serif;
+}
+
+/* The landing page keeps the theme but opts out of `overflow-x: hidden`:
+   that would turn the root into a scroll container, and `position: sticky`
+   only sticks against its nearest scroll container — so the navbar would
+   silently scroll away instead of sticking. */
+.sauti-page {
+  overflow-x: visible;
+}
+
+/* Urdu must render everywhere, including outside `.sauti-app` (the auth gate,
+   route loading states). Declared unlayered so it replaces Tailwind's `html`
+   preflight font; `font-*` utilities on child elements still win. */
+html {
+  font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system,
+    "Noto Nastaliq Urdu", "Noto Naskh Arabic", sans-serif;
+}
+
+/* Same fallback for the `font-sans` utility (used throughout the app for
+   Urdu labels): Latin glyphs are unchanged, Urdu glyphs reach the webfont. */
+.font-sans {
+  font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system,
+    "Noto Nastaliq Urdu", "Noto Naskh Arabic", sans-serif;
+}
+
 /* Ambient Mesh Gradient Background */
 .sauti-app .ambient-bg {
   position: fixed;

@@ -130,7 +130,10 @@ createRoot(document.getElementById("root")!).render(
               <Route
                 path="/dashboard"
                 element={
-                  <RequireAuth>
+                  <RequireAuth
+                    title="کھاتہ دیکھنے کے لیے سائن ان کریں"
+                    description="صوتی بقیہ آپ کا ذاتی وائس کھاتہ ہے — آمدنی، خرچہ اور بقایا سب ایک ہی جگہ۔"
+                  >
                     <Dashboard />
                   </RequireAuth>
                 }
