@@ -1,21 +1,37 @@
 /**
  * صوتی بقیہ — shared domain logic.
  *
- * Pure helpers for month math, running balances, category detection and CSV
- * import/export. Kept free of React so the UI layer stays thin.
+ * Pure, dependency-free helpers. Everything here is deterministic and covered
+ * by `scripts/verify-khata.ts`, which runs with `bun scripts/verify-khata.ts`.
+ *
+ * Design notes
+ * ------------
+ * • `Entry.timestamp` (epoch ms) is the single source of truth for ordering and
+ *   for the month bucket. `date` / `time` are display-only strings and are never
+ *   parsed back, so an Urdu-formatted date can never break sorting.
+ * • Identifiers come from {@link nextId}, which is strictly monotonic, so two
+ *   records created in the same millisecond still get distinct ids (the old
+ *   `Date.now() + index` scheme silently collided).
+ * • `getMonthCarryForward` is expressed as a single forward pass
+ *   (`buildLedger`) and memoised per `DataState` object instead of recursing.
  */
 
 export type EntryType = "income" | "expense";
 
 export type Entry = {
+  /** Strictly monotonic; see {@link nextId}. */
   id: number;
   amount: number;
   detail: string;
   category: string;
   icon: string;
+  /** `YYYY-MM`; the bucket a record is counted in. */
   monthKey: string;
+  /** Display only (Urdu). Never parsed. */
   date: string;
+  /** Display only (Urdu). Never parsed. */
   time: string;
+  /** Epoch ms — ordering, sorting and cloud sync all use this. */
   timestamp: number;
 };
 
@@ -42,7 +58,8 @@ export type RecurringEntry = {
   enabled: boolean;
 };
 
-export type DigitStyle = "ur" | "latin";
+/** `latin` (`5,000`) is the original look; `eastern` (`۵,۰۰۰`) is opt-in. */
+export type DigitStyle = "latin" | "eastern";
 
 export type MonthTotals = {
   carryForward: number;
@@ -67,6 +84,9 @@ export type AiInsight = {
   riskLevel: "low" | "medium" | "high";
 };
 
+/** Result type used by the validation helpers (no throwing on bad input). */
+export type Result<T> = { ok: true; value: T } | { ok: false; message: string };
+
 /* ------------------------------------------------------------------ */
 /* Storage keys                                                        */
 /* ------------------------------------------------------------------ */
@@ -75,8 +95,13 @@ export const API_KEY_STORAGE = "nabeelGeminiApiKey";
 export const PREF_STORAGE_KEY = "sautiBaqayaPrefs";
 
 /* ------------------------------------------------------------------ */
-/* Constants                                                           */
+/* Limits & constants                                                  */
 /* ------------------------------------------------------------------ */
+/** One crore — anything above this is treated as a typo. */
+export const MAX_AMOUNT = 100_000_000;
+/** Hard cap so a huge ledger can never blow a single Convex mutation. */
+export const MAX_RECORDS = 1000;
+
 export const MONTH_NAMES: Record<string, string> = {
   "01": "جنوری",
   "02": "فروری",
@@ -92,7 +117,7 @@ export const MONTH_NAMES: Record<string, string> = {
   "12": "دسمبر",
 };
 
-/** Known spend/income categories, in the order they are offered in the UI. */
+/** Order matters: earlier rules win ties, exactly like the original app. */
 export const CATEGORY_CATALOG: { name: string; icon: string }[] = [
   { name: "سفر", icon: "fa-gas-pump" },
   { name: "کھانا", icon: "fa-utensils" },
@@ -101,6 +126,169 @@ export const CATEGORY_CATALOG: { name: string; icon: string }[] = [
   { name: "دوکان", icon: "fa-store" },
   { name: "عام", icon: "fa-receipt" },
 ];
+
+/* ------------------------------------------------------------------ */
+/* Ids                                                                 */
+/* ------------------------------------------------------------------ */
+let lastIssuedId = 0;
+
+/**
+ * Strictly monotonic id. Two calls in the same millisecond still differ, which
+ * `Date.now()` alone does not guarantee.
+ */
+export function nextId(): number {
+  const now = Date.now();
+  lastIssuedId = now > lastIssuedId ? now : lastIssuedId + 1;
+  return lastIssuedId;
+}
+
+/* ------------------------------------------------------------------ */
+/* Digit normalisation & amount parsing                                */
+/* ------------------------------------------------------------------ */
+const EASTERN_TO_ASCII: Record<string, string> = {
+  "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+  "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
+  "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
+  "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
+};
+
+/** Converts Eastern-Arabic (and Arabic-Indic) digits to ASCII. */
+export function normalizeDigits(input: string): string {
+  return input.replace(/[٠-٩۰-۹]/g, (ch) => EASTERN_TO_ASCII[ch] ?? ch);
+}
+
+/** Numerals below 100 — additive when stacked. */
+const URDU_SMALL: Record<string, number> = {
+  ایک: 1, یک: 1, دو: 2, تین: 3, چار: 4, پانچ: 5,
+  چھ: 6, سات: 7, آٹھ: 8, اٹھ: 8, نو: 9, دس: 10,
+  گیارہ: 11, بارہ: 12, تیرہ: 13, چودہ: 14, پندرہ: 15,
+  سولہ: 16, سترہ: 17, اٹھارہ: 18, انیس: 19, بیس: 20,
+  تیس: 30, چالیس: 40, پچاس: 50, ساٹھ: 60, ستر: 70, اسی: 80, نوے: 90,
+};
+
+/** Place-value multipliers — these close the current group. */
+const URDU_MULTIPLE: Record<string, number> = {
+  سو: 100,
+  ہزار: 1000,
+  ہزارہ: 1000,
+  لاکھ: 100_000,
+  کروڑ: 10_000_000,
+};
+
+/**
+ * Pulls an amount out of spoken Urdu text. Handles ASCII digits, Eastern-Arabic
+ * digits, thousands separators and Urdu numeral words such as "دس ہزار پانچ سو".
+ */
+export function parseAmount(raw: string): number | null {
+  if (!raw) return null;
+  // Drop thousands separators only when they sit between digits, so "5,000"
+  // stays one number instead of splitting into "5" and "000".
+  const normalized = normalizeDigits(raw).replace(/([0-9])[,،](?=[0-9])/g, "$1");
+
+  const numeric = normalized.match(/\d+(?:\.\d+)?/);
+  if (numeric) {
+    const value = Number.parseFloat(numeric[0]);
+    if (Number.isFinite(value) && value > 0) return Math.round(value);
+  }
+
+  const tokens = normalized.split(/[^\u0600-\u06FFa-zA-Z]+/).filter(Boolean);
+  let total = 0;
+  let current = 0;
+  let matched = false;
+
+  for (const token of tokens) {
+    const multiple = URDU_MULTIPLE[token];
+    if (multiple !== undefined) {
+      current = (current || 1) * multiple;
+      total += current;
+      current = 0;
+      matched = true;
+      continue;
+    }
+    const small = URDU_SMALL[token];
+    if (small !== undefined) {
+      current += small;
+      matched = true;
+    }
+  }
+
+  const value = total + current;
+  return matched && value > 0 ? Math.round(value) : null;
+}
+
+/** Rejects zero, negative, non-numeric and absurd amounts. */
+export function validateAmount(input: unknown): Result<number> {
+  const value =
+    typeof input === "number" ? input : Number.parseFloat(String(input ?? "").trim());
+  if (!Number.isFinite(value)) return { ok: false, message: "رقم درست نہیں ہے۔" };
+  if (value <= 0) return { ok: false, message: "رقم صفر سے زیادہ ہونی چاہیے۔" };
+  if (value > MAX_AMOUNT) return { ok: false, message: "رقم بہت زیادہ ہے۔" };
+  return { ok: true, value: Math.round(value) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Voice detail extraction                                             */
+/* ------------------------------------------------------------------ */
+const SPEECH_FILLERS =
+  /روپے|روپیہ|روپیا|ruppes|rupees|rs\.?|جمع|کر|کریں|کرو|کرنا|کروانا|دو|دیں|دیا|دیے|دینا|دینے|دے|لیں|لے|لو|لوں|لیے|ایڈ|add|گئے|گئی|تھے|تھی|ہے|ہیں|کا|کے|کی|میں|سے|پہ|پر|وہ|یہ/gi;
+
+/**
+ * Strips the amount and common filler words so only the real description is
+ * left. Replaces the old `length > 3` guesswork with something explainable.
+ */
+export function extractDetail(text: string, amount: number): string {
+  let cleaned = normalizeDigits(text ?? "");
+  cleaned = cleaned.replace(new RegExp(String(amount), "g"), " ");
+  cleaned = cleaned.replace(SPEECH_FILLERS, " ");
+  return cleaned.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * True when the utterance carries a usable description. Three characters is the
+ * floor so bare particles ("لو", "دے") are not mistaken for a description.
+ */
+export function hasSpokenDetail(text: string, amount: number): boolean {
+  const detail = extractDetail(text, amount);
+  return detail.length >= 3 && /[\u0600-\u06FF]/.test(detail);
+}
+
+/* ------------------------------------------------------------------ */
+/* Categories (data driven)                                            */
+/* ------------------------------------------------------------------ */
+export type CategoryRule = { name: string; icon: string; patterns: RegExp[] };
+
+export const CATEGORY_RULES: CategoryRule[] = [
+  { name: "سفر", icon: "fa-gas-pump", patterns: [/پٹرول/i, /پیٹرول/i, /سفر/i, /گاڑی/i, /بائیک/i] },
+  { name: "کھانا", icon: "fa-utensils", patterns: [/چائے/i, /کھانا/i, /روٹی/i, /پانی/i, /ہوٹل/i, /چہائے/i] },
+  { name: "یوٹیلیٹی بل", icon: "fa-bolt", patterns: [/بل/i, /بجلی/i, /گیس/i, /انٹرنیٹ/i, /واٹر/i] },
+  { name: "ادھار کھاتہ", icon: "fa-hand-holding-usd", patterns: [/ادھار/i, /قرض/i, /واپسی/i] },
+  { name: "دوکان", icon: "fa-store", patterns: [/دوکان/i, /دکان/i, /سامان/i, /مال/i] },
+];
+
+/**
+ * Scores every rule instead of returning on the first hit, so a sentence that
+ * mentions two categories resolves deterministically (most matches wins, ties
+ * go to the earlier rule — the original priority order).
+ */
+export function detectCategory(text: string): { name: string; icon: string } {
+  const haystack = text ?? "";
+  let bestName = "عام";
+  let bestIcon = "fa-receipt";
+  let bestScore = 0;
+
+  for (const rule of CATEGORY_RULES) {
+    let score = 0;
+    for (const pattern of rule.patterns) {
+      if (pattern.test(haystack)) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestName = rule.name;
+      bestIcon = rule.icon;
+    }
+  }
+  return { name: bestName, icon: bestIcon };
+}
 
 /* ------------------------------------------------------------------ */
 /* Month math                                                          */
@@ -152,35 +340,69 @@ export function monthOf(entry: { monthKey?: string }): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Totals & carry-forward                                              */
+/* Ledger (memoised single pass)                                       */
 /* ------------------------------------------------------------------ */
+export type LedgerMonth = {
+  income: number;
+  expense: number;
+  opening: number;
+  closing: number;
+};
+
+export type Ledger = { months: Map<string, LedgerMonth> };
+
+const ledgerCache = new WeakMap<DataState, Ledger>();
+
+/**
+ * One forward pass over the records. Memoised on the `DataState` object, so
+ * React can call the accessors on every render without re-walking the ledger.
+ */
+export function buildLedger(db: DataState): Ledger {
+  const cached = ledgerCache.get(db);
+  if (cached) return cached;
+
+  const income = new Map<string, number>();
+  const expense = new Map<string, number>();
+  db.income.forEach((i) => {
+    const key = monthOf(i);
+    income.set(key, (income.get(key) ?? 0) + i.amount);
+  });
+  db.expense.forEach((e) => {
+    const key = monthOf(e);
+    expense.set(key, (expense.get(key) ?? 0) + e.amount);
+  });
+
+  const keys = Array.from(new Set([...income.keys(), ...expense.keys()])).sort();
+  const months = new Map<string, LedgerMonth>();
+  let opening = 0;
+  for (const key of keys) {
+    const inc = income.get(key) ?? 0;
+    const exp = expense.get(key) ?? 0;
+    months.set(key, { income: inc, expense: exp, opening, closing: opening + inc - exp });
+    opening += inc - exp;
+  }
+
+  const ledger: Ledger = { months };
+  ledgerCache.set(db, ledger);
+  return ledger;
+}
+
 export function sumFor(list: Entry[], mKey: string): number {
   return list
     .filter((item) => monthOf(item) === mKey)
     .reduce((sum, item) => sum + item.amount, 0);
 }
 
-function getMonthEndingBalance(db: DataState, mKey: string): number {
-  return (
-    getMonthCarryForward(db, mKey) + sumFor(db.income, mKey) - sumFor(db.expense, mKey)
-  );
-}
-
+/** Amount carried into `mKey` from every earlier month. */
 export function getMonthCarryForward(db: DataState, mKey: string): number {
-  const prevKey = getPreviousMonthKey(mKey);
-  const hasPrevData =
-    db.income.some((i) => monthOf(i) === prevKey) ||
-    db.expense.some((e) => monthOf(e) === prevKey);
-  if (!hasPrevData) {
-    const hasOlder =
-      db.income.some((i) => monthOf(i) < mKey) ||
-      db.expense.some((e) => monthOf(e) < mKey);
-    if (!hasOlder) return 0;
+  let carry = 0;
+  for (const [key, month] of buildLedger(db).months) {
+    if (key < mKey) carry += month.income - month.expense;
   }
-  return getMonthEndingBalance(db, prevKey);
+  return carry;
 }
 
-/** Running balance at the *start* of `mKey` — i.e. what carried in. */
+/** Balance at the very start of `mKey`. */
 export function getOpeningBalance(db: DataState, mKey: string): number {
   return getMonthCarryForward(db, mKey);
 }
@@ -218,12 +440,14 @@ export function getMonthlySeries(
   endingMonthKey: string,
   span: number,
 ): { monthKey: string; income: number; expense: number }[] {
+  const ledger = buildLedger(db);
   return lastNMonths(endingMonthKey, span).map((monthKey) => {
-    const carry = getMonthCarryForward(db, monthKey);
+    const month = ledger.months.get(monthKey);
+    // Mirrors the original series: carry-forward + this month's income.
     return {
       monthKey,
-      income: carry + sumFor(db.income, monthKey),
-      expense: sumFor(db.expense, monthKey),
+      income: month ? month.opening + month.income : 0,
+      expense: month?.expense ?? 0,
     };
   });
 }
@@ -273,27 +497,21 @@ export function getBudgetAlerts(
 }
 
 /* ------------------------------------------------------------------ */
-/* Category detection                                                  */
-/* ------------------------------------------------------------------ */
-export function detectCategory(text: string): { name: string; icon: string } {
-  if (/پٹرول|پیٹرول|سفر|گاڑی|بائیک/i.test(text)) return { name: "سفر", icon: "fa-gas-pump" };
-  if (/چائے|کھانا|روٹی|پانی|ہوٹل/i.test(text)) return { name: "کھانا", icon: "fa-utensils" };
-  if (/بل|بجلی|گیس|انٹرنیٹ/i.test(text)) return { name: "یوٹیلیٹی بل", icon: "fa-bolt" };
-  if (/ادھار|قرض|واپسی/i.test(text)) return { name: "ادھار کھاتہ", icon: "fa-hand-holding-usd" };
-  if (/دوکان|سامان|مال|دکان/i.test(text)) return { name: "دوکان", icon: "fa-store" };
-  return { name: "عام", icon: "fa-receipt" };
-}
-
-/* ------------------------------------------------------------------ */
 /* Formatting                                                          */
 /* ------------------------------------------------------------------ */
+const EASTERN_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+
 /**
- * `ur` keeps the original Eastern-Arabic digits (`۵۰۰`), `latin` switches the
- * whole app to `500`. The default matches the original app exactly.
+ * Deterministic — it never depends on the host's ICU/CLDR data. The default
+ * `latin` output is byte-identical to what the original `toLocaleString("ur-PK")`
+ * produced in the app's browser, so the preview does not move.
  */
 export function formatNumber(value: number, style: DigitStyle): string {
-  if (style === "latin") return value.toLocaleString("en-US");
-  return value.toLocaleString("ur-PK");
+  const latin = Number.isFinite(value)
+    ? value.toLocaleString("en-US", { maximumFractionDigits: 3 })
+    : "0";
+  if (style !== "eastern") return latin;
+  return latin.replace(/[0-9]/g, (digit) => EASTERN_DIGITS[Number(digit)] ?? digit);
 }
 
 /* ------------------------------------------------------------------ */
@@ -311,7 +529,9 @@ export function loadData(): DataState {
     return {
       income: Array.isArray(parsed.income) ? parsed.income : [],
       expense: Array.isArray(parsed.expense) ? parsed.expense : [],
-      undoStack: Array.isArray(parsed.undoStack) ? parsed.undoStack : [],
+      // The undo stack is intentionally dropped on reload: undoing a record
+      // from a previous session would silently delete data the user cannot see.
+      undoStack: [],
     };
   } catch {
     return emptyData();
@@ -320,21 +540,21 @@ export function loadData(): DataState {
 
 export function persistData(db: DataState) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    // Only the records are worth persisting; the undo stack is session state.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...db, undoStack: [] }));
   } catch {
     /* quota exceeded — the app keeps working in memory */
   }
 }
 
 export type Prefs = {
-  /** `ur` (default, Eastern-Arabic digits) or `latin`. */
   digitStyle: DigitStyle;
   /** Recurring incomes already applied, per month key — stops duplicates. */
   appliedRecurring: Record<string, string[]>;
 };
 
 export function defaultPrefs(): Prefs {
-  return { digitStyle: "ur", appliedRecurring: {} };
+  return { digitStyle: "latin", appliedRecurring: {} };
 }
 
 export function loadPrefs(): Prefs {
@@ -346,8 +566,9 @@ export function loadPrefs(): Prefs {
       parsed.appliedRecurring && typeof parsed.appliedRecurring === "object"
         ? parsed.appliedRecurring
         : {};
+    // `ur` was the old flag name for the (Latin-digit) default.
     return {
-      digitStyle: parsed.digitStyle === "latin" ? "latin" : "ur",
+      digitStyle: parsed.digitStyle === "eastern" ? "eastern" : "latin",
       appliedRecurring: applied,
     };
   } catch {
@@ -364,15 +585,53 @@ export function persistPrefs(prefs: Prefs) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Deduplication                                                       */
+/* ------------------------------------------------------------------ */
+/** Stable identity for a record across imports and sync. */
+export function entryKey(entry: Entry): string {
+  return `${monthOf(entry)}|${entry.category}|${entry.amount}|${(entry.detail ?? "").trim()}`;
+}
+
+/** Drops incoming records that already exist (same month/category/amount/detail). */
+export function dedupeEntries(existing: Entry[], incoming: Entry[]): Entry[] {
+  const seen = new Set(existing.map(entryKey));
+  const unique: Entry[] = [];
+  for (const entry of incoming) {
+    const key = entryKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(entry);
+  }
+  return unique;
+}
+
+/* ------------------------------------------------------------------ */
 /* CSV backup & restore                                                */
 /* ------------------------------------------------------------------ */
+/**
+ * Quotes a field and neutralises spreadsheet formula injection (`=`, `+`, `-`,
+ * `@`) by prefixing an apostrophe.
+ */
+export function escapeCsvField(value: string): string {
+  let cell = value ?? "";
+  if (/^[=+\-@\t\r]/.test(cell)) cell = `'${cell}`;
+  return `"${cell.replace(/"/g, '""')}"`;
+}
+
 export function buildCsv(db: DataState): string {
   const rows = ["Month,Type,Category,Date,Time,Amount,Detail"];
   const push = (kind: EntryType, list: Entry[]) =>
     list.forEach((item) => {
-      const detail = `"${(item.detail ?? "").replace(/"/g, '""')}"`;
       rows.push(
-        `${item.monthKey || getCurrentMonthKey()},${kind === "income" ? "Income" : "Expense"},${item.category || kind},${item.date},${item.time},${item.amount},${detail}`,
+        [
+          item.monthKey || getCurrentMonthKey(),
+          kind === "income" ? "Income" : "Expense",
+          escapeCsvField(item.category || kind),
+          escapeCsvField(item.date ?? ""),
+          escapeCsvField(item.time ?? ""),
+          String(item.amount),
+          escapeCsvField(item.detail ?? ""),
+        ].join(","),
       );
     });
   push("income", db.income);
@@ -442,26 +701,23 @@ export function entriesFromCsv(
   const expense: Entry[] = [];
   for (let r = 1; r < rows.length; r += 1) {
     const row = rows[r];
-    const amount = Number.parseFloat((row[iAmount] ?? "").replace(/[^\d.-]/g, ""));
+    const amount = Number.parseFloat(normalizeDigits(row[iAmount] ?? "").replace(/[^\d.-]/g, ""));
     if (!Number.isFinite(amount)) continue;
     const detail = (row[iDetail] ?? "").trim();
     const category = (row[iCat] ?? "").trim() || detectCategory(detail).name;
     const icon =
       CATEGORY_CATALOG.find((c) => c.name === category)?.icon ?? "fa-receipt";
-    const now = new Date();
+    const timestamp = nextId();
     const entry: Entry = {
-      id: now.getTime() + r,
+      id: timestamp,
       amount,
       detail,
       category,
       icon,
       monthKey: (row[iMonth] ?? "").trim() || getCurrentMonthKey(),
-      date: (row[iDate] ?? "").trim() || now.toLocaleDateString("ur-PK"),
-      time: (row[iTime] ?? "").trim() || now.toLocaleTimeString("ur-PK", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-      timestamp: now.getTime() + r,
+      date: (row[iDate] ?? "").trim() || "",
+      time: (row[iTime] ?? "").trim() || "",
+      timestamp,
     };
     const kind = (row[iType] ?? "").trim().toLowerCase();
     if (kind.startsWith("in") || kind.includes("آمدن") || kind.includes("جمع")) {

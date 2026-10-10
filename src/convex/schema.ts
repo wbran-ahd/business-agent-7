@@ -37,6 +37,7 @@ const schema = defineSchema(
     /**
      * Cloud backup of صوتی بقیہ ledger entries. One row per income/expense
      * record so the khata survives across devices and browser clears.
+     * `localId` is the client's monotonic id and the sync upsert key.
      */
     records: defineTable({
       userId: v.id("users"),
@@ -50,9 +51,30 @@ const schema = defineSchema(
       date: v.string(),
       time: v.string(),
       timestamp: v.number(),
-    })
-      .index("by_user", ["userId"])
-      .index("by_user_local", ["userId", "localId"]),
+    }).index("by_user", ["userId"]),
+
+    /**
+     * Optimistic-concurrency token for the ledger. A client must present the
+     * version it last saw; a mismatch is reported as a conflict instead of
+     * silently overwriting somebody else's newer records.
+     */
+    syncState: defineTable({
+      userId: v.id("users"),
+      version: v.number(),
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"]),
+
+    /** Deduplicated Gemini responses, keyed by a hash of the request. */
+    aiCache: defineTable({
+      key: v.string(),
+      userId: v.union(v.id("users"), v.null()),
+      title: v.string(),
+      spoken: v.string(),
+      insight: v.string(),
+      topCategory: v.string(),
+      riskLevel: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
+      createdAt: v.number(),
+    }).index("by_key", ["key"]),
 
     /** Per-user assistant settings: budgets, recurring incomes, AI key. */
     userSettings: defineTable({
@@ -70,8 +92,13 @@ const schema = defineSchema(
           }),
         ),
       ),
-      /** Gemini API key supplied by the user inside the app (never returned). */
+      /** `monthKey|recurringId` pairs already materialised — idempotency. */
+      appliedKeys: v.optional(v.array(v.string())),
+      /** Gemini API key, AES-GCM encrypted when `SAUTI_KEY_SECRET` is set. */
       geminiKey: v.optional(v.string()),
+      /** Rolling daily quota so a runaway client cannot drain the key. */
+      aiDay: v.optional(v.string()),
+      aiCalls: v.optional(v.number()),
     }).index("by_user", ["userId"])
   },
   {
