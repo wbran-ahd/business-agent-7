@@ -1,0 +1,1 @@
+import{R as o}from"./react-vendor-B20UrvSN.js";var e=typeof window<"u"&&typeof window.HTMLElement<"u"&&typeof document<"u";const t=o.createContext(null);t.displayName="HookFormControlContext";e?o.useLayoutEffect:o.useEffect;const n=o.createContext(null);n.displayName="HookFormContext";
