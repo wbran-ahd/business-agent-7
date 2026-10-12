@@ -93,18 +93,42 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   };
 
+  /**
+   * Guest sign-in.
+   *
+   * This used to leave the button stuck on its spinner: `signIn` was awaited
+   * and its result ignored, so when the backend could not complete the
+   * anonymous sign-in the page navigated to the dashboard still signed out —
+   * `RequireAuth` bounced the visitor back to `/auth` and the only visible
+   * effect was a permanent "Continue as Guest" spinner.
+   *
+   * We now check that sign-in actually authenticated *before* leaving the
+   * page, surface the real reason when it didn't, and always clear the
+   * spinner so the button never locks up.
+   */
   const handleGuestLogin = async () => {
+    if (isLoading) return;
     setIsLoading(true);
     setError(null);
     try {
-      console.log("Attempting anonymous sign in...");
-      await signIn("anonymous");
-      console.log("Anonymous sign in successful");
-      navigate(redirect);
+      const { signingIn } = await signIn("anonymous");
+
+      // `signIn` resolves with `signingIn: false` when the provider did not
+      // produce a session. Navigating anyway used to bounce the visitor
+      // straight back through `RequireAuth`, so the spinner never cleared.
+      // Treat it as a failure and say so instead.
+      if (!signingIn) {
+        throw new Error("بطور مہمان سائن ان مکمل نہیں ہو سکا۔");
+      }
+
+      navigate(redirect, { replace: true });
     } catch (error) {
       console.error("Guest login error:", error);
-      console.error("Error details:", JSON.stringify(error, null, 2));
-      setError(`Failed to sign in as guest: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setError(
+        `Failed to sign in as guest: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
       setIsLoading(false);
     }
   };
