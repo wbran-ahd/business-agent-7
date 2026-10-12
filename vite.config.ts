@@ -96,9 +96,13 @@ export default defineConfig({
     // Bind to all interfaces so the browser runtime's server-ready event fires.
     host: true,
     port: 5173,
-    // Keep HMR on, but disable full-screen error overlay
-    hmr: {
-      overlay: false,
-    },
+    // Fail loudly instead of silently moving to 5174 when 5173 is taken. A
+    // server that drifts to another port looks like "the dev server never
+    // started" to the managed preview, which only watches 5173 and captured no
+    // logs because nothing crashed.
+    strictPort: true,
+    // HMR must stay disabled in this environment (the managed preview owns the
+    // page lifecycle and full-reload picks up edits instead).
+    hmr: false,
   },
 });
