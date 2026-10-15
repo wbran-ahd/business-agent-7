@@ -12,8 +12,8 @@
 
 const ur = {
   /* header */
-  wakeWordStatus: "WAKE WORD ACTIVE",
-  spectralGrid: "SPECTRAL GRID",
+  wakeWordStatus: "آواز ایکٹو",
+  spectralGrid: "اسپیکٹرل گرڈ",
   assistantName: "صوتی بقیہ (پرو اسسٹنٹ)",
   voiceActiveHint: '"اے منشی" وائس ایکٹیو →',
   csvBackup: "CSV بیک اپ",
@@ -45,7 +45,7 @@ const ur = {
 
   /* notepad modal */
   search: "تلاش کریں…",
-  allCategories: "تمام categories",
+  allCategories: "تمام اقسام",
   newEntry: "نئی",
   amountLabel: "رقم",
   detailLabel: "تفصیل",
@@ -72,7 +72,7 @@ const ur = {
   /* analytics modal */
   analyticsTitle: "ماہانہ خرچ و آمدنی کا گراف",
   trendTitle: "پچھلے 6 ماہ کا رجحان",
-  categoryTitle: "category وار خرچہ",
+  categoryTitle: "قسم وار خرچہ",
   aiAnalyze: "🤖 اے آئی سے تجزیہ کروائیں",
   aiRunning: "تجزیہ تیار ہو رہا ہے…",
 

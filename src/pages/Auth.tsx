@@ -16,7 +16,7 @@ import {
 
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.svg";
-import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
+import { ArrowLeft, Loader2, Mail, UserX } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
@@ -66,7 +66,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       setError(
         error instanceof Error
           ? error.message
-          : "Failed to send verification code. Please try again.",
+          : "تصدیقی کوڈ بھیجا نہیں جا سکا۔ دوبارہ کوشش کریں۔",
       );
       setIsLoading(false);
     }
@@ -80,13 +80,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       const formData = new FormData(event.currentTarget);
       await signIn("email-otp", formData);
 
-      console.log("signed in");
-
       navigate(redirect);
     } catch (error) {
       console.error("OTP verification error:", error);
 
-      setError("The verification code you entered is incorrect.");
+      setError("درج کردہ تصدیقی کوڈ غلط ہے۔");
       setIsLoading(false);
 
       setOtp("");
@@ -125,8 +123,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     } catch (error) {
       console.error("Guest login error:", error);
       setError(
-        `Failed to sign in as guest: ${
-          error instanceof Error ? error.message : "Unknown error"
+        `بطور مہمان سائن ان ناکام: ${
+          error instanceof Error ? error.message : "نامعلوم خرابی"
         }`,
       );
       setIsLoading(false);
@@ -147,16 +145,16 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
               <div className="flex justify-center">
                     <img
                       src={logo}
-                      alt="Lock Icon"
+                      alt="صوتی بقیہ لوگو"
                       width={64}
                       height={64}
                       className="rounded-lg mb-4 mt-4 cursor-pointer"
                       onClick={() => navigate("/")}
                     />
                   </div>
-                <CardTitle className="text-xl">Get Started</CardTitle>
+                <CardTitle className="text-xl">شروع کریں</CardTitle>
                 <CardDescription>
-                  Enter your email to log in or sign up
+                  سائن ان یا سائن اپ کے لیے اپنا ای میل درج کریں
                 </CardDescription>
               </CardHeader>
               <form onSubmit={handleEmailSubmit}>
@@ -164,12 +162,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   
                   <div className="relative flex items-center gap-2">
                     <div className="relative flex-1">
-                      <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Mail className="absolute start-3 top-3 h-4 w-4 text-muted-foreground" />
                       <Input
                         name="email"
                         placeholder="name@example.com"
                         type="email"
-                        className="pl-9"
+                        dir="ltr"
+                        className="ps-9"
                         disabled={isLoading}
                         required
                       />
@@ -183,7 +182,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       {isLoading ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
-                        <ArrowRight className="h-4 w-4" />
+                        <ArrowLeft className="h-4 w-4" />
                       )}
                     </Button>
                   </div>
@@ -198,7 +197,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       </div>
                       <div className="relative flex justify-center text-xs uppercase">
                         <span className="bg-background px-2 text-muted-foreground">
-                          Or
+                          یا
                         </span>
                       </div>
                     </div>
@@ -210,8 +209,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       onClick={handleGuestLogin}
                       disabled={isLoading}
                     >
-                      <UserX className="mr-2 h-4 w-4" />
-                      Continue as Guest
+                      <UserX className="me-2 h-4 w-4" />
+                      بطور مہمان جاری رکھیں
                     </Button>
                   </div>
                 </CardContent>
@@ -220,9 +219,9 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           ) : (
             <>
               <CardHeader className="text-center mt-4">
-                <CardTitle>Check your email</CardTitle>
+                <CardTitle>اپنا ای میل دیکھیں</CardTitle>
                 <CardDescription>
-                  We've sent a code to {step.email}
+                  ہم نے {step.email} پر ایک تصدیقی کوڈ بھیجا ہے
                 </CardDescription>
               </CardHeader>
               <form onSubmit={handleOtpSubmit}>
@@ -230,7 +229,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   <input type="hidden" name="email" value={step.email} />
                   <input type="hidden" name="code" value={otp} />
 
-                  <div className="flex justify-center">
+                  <div className="flex justify-center" dir="ltr">
                     <InputOTP
                       value={otp}
                       onChange={setOtp}
@@ -259,13 +258,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground text-center mt-4">
-                    Didn't receive a code?{" "}
+                    کوڈ موصول نہیں ہوا؟{" "}
                     <Button
                       variant="link"
                       className="p-0 h-auto"
                       onClick={() => setStep("signIn")}
                     >
-                      Try again
+                      دوبارہ کوشش کریں
                     </Button>
                   </p>
                 </CardContent>
@@ -277,13 +276,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   >
                     {isLoading ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Verifying...
+                        <Loader2 className="me-2 h-4 w-4 animate-spin" />
+                        تصدیق ہو رہی ہے…
                       </>
                     ) : (
                       <>
-                        Verify code
-                        <ArrowRight className="ml-2 h-4 w-4" />
+                        کوڈ کی تصدیق کریں
+                        <ArrowLeft className="ms-2 h-4 w-4" />
                       </>
                     )}
                   </Button>
@@ -294,7 +293,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     disabled={isLoading}
                     className="w-full"
                   >
-                    Use different email
+                    دوسرا ای میل استعمال کریں
                   </Button>
                 </CardFooter>
               </form>
@@ -302,7 +301,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           )}
 
           <div className="py-4 px-6 text-xs text-center text-muted-foreground bg-muted border-t rounded-b-lg">
-            Secured by{" "}
+            محفوظ از{" "}
             <a
               href="https://freebuff.com"
               target="_blank"

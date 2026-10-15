@@ -610,8 +610,8 @@ export default function SautiBaqaya() {
         />
         <span className="leading-tight">
           <span className="nastaliq block text-sm text-white">صوتی بقیہ</span>
-          <span className="block font-sans text-[10px] tracking-[0.2em] text-white/40">
-            SAUTI BAQAYA
+          <span className="block font-sans text-[10px] text-white/40">
+            اردو وائس فنانس اسسٹنٹ
           </span>
         </span>
       </Link>
@@ -704,7 +704,7 @@ export default function SautiBaqaya() {
             <div className="glass-panel my-auto flex w-full max-w-xl min-h-[78vh] flex-col relative overflow-hidden lg:min-h-[88vh]">
         {/* Header Section */}
         <div className="p-4 sm:p-6 border-b border-white/10">
-          <div className="flex justify-between items-center text-[11px] sm:text-xs tracking-widest text-white/50 font-sans mb-3">
+          <div className="flex justify-between items-center text-[11px] sm:text-xs text-white/50 font-sans mb-3">
             <span className="flex items-center gap-1">
               <i className="fas fa-satellite-dish text-emerald-400"></i> {t("wakeWordStatus")}
             </span>
@@ -1125,7 +1125,7 @@ export default function SautiBaqaya() {
 
         {/* Gemini key */}
         <div className="space-y-2 text-sm text-white/80 mb-5">
-          <p>ذہین جیمینی اے آئی اور کلاؤڈ انٹیلی جنس کے لیے اپنی API Key درج کریں:</p>
+          <p>ذہین جیمینی اے آئی اور کلاؤڈ انٹیلی جنس کے لیے اپنی اے آئی کی (API Key) درج کریں:</p>
           <input
             type="password"
             value={apiKeyDraft}
@@ -1153,7 +1153,7 @@ export default function SautiBaqaya() {
                   : "bg-white/5 text-white/70 border-white/20"
               }`}
             >
-              Roman (500)
+رومن ہندسے (500)
             </button>
             <button
               onClick={() => khata.setDigitStyle("eastern")}
@@ -1171,7 +1171,7 @@ export default function SautiBaqaya() {
         {/* Budgets */}
         <div className="mb-5">
           <h3 className="text-sm font-bold text-white/85 mb-2">
-            <i className="fas fa-bullseye text-rose-300 ml-1"></i> category بجٹ (ماہانہ)
+            <i className="fas fa-bullseye text-rose-300 ml-1"></i> قسم وار بجٹ (ماہانہ)
           </h3>
           <div className="space-y-2">
             {CATEGORY_CATALOG.map((category) => {
@@ -1313,7 +1313,7 @@ export default function SautiBaqaya() {
               </button>
               <button
                 onClick={() => void sync.signOut()}
-                aria-label="sign out"
+                aria-label="سائن آؤٹ کریں"
                 className={`${smallBtn} bg-white/5 hover:bg-white/10 text-white/70 border-white/20`}
               >
                 <i className="fas fa-right-from-bracket"></i>

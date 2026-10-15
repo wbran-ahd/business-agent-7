@@ -19,12 +19,13 @@ import { Navigate, useLocation, useNavigate } from "react-router";
  * on a bare sign-in form with no idea which page they had asked for or why they
  * were moved. The block is now stated on the page they landed on, and sign-in
  * still returns them to it via `returnTo`. Pass `redirectImmediately` for a
- * route where the bounce really is the better experience.
+ * route where the bounce really is the better experience. All visible copy is
+ * Urdu, matching the rest of the app.
  */
 export function RequireAuth({
   children,
-  title = "Sign in to continue",
-  description = "This page is only available to signed-in users.",
+  title = "جاری رکھنے کے لیے سائن ان کریں",
+  description = "یہ صفحہ صرف سائن ان شدہ صارفین کے لیے دستیاب ہے۔",
   redirectImmediately = false,
 }: {
   children: ReactNode;
@@ -68,18 +69,18 @@ export function RequireAuth({
             <CardDescription>{description}</CardDescription>
           </CardHeader>
           <CardContent className="text-center text-sm text-muted-foreground">
-            You'll come straight back to this page once you're signed in.
+            سائن ان کے بعد آپ براہِ راست اسی صفحے پر واپس آ جائیں گے۔
           </CardContent>
           <CardFooter className="flex flex-col gap-2">
             <Button className="w-full" onClick={() => navigate(signInHref)}>
-              Sign in
+              سائن ان کریں
             </Button>
             <Button
               variant="ghost"
               className="w-full"
               onClick={() => navigate("/")}
             >
-              Back to home
+              واپس صفحۂ اول پر
             </Button>
           </CardFooter>
         </Card>

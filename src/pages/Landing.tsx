@@ -83,7 +83,7 @@ const FEATURES = [
   {
     icon: PieChart,
     title: "چارٹس اور رجحان",
-    body: "پچھلے 6 ماہ کا آمدنی-خرچہ رجحان اور category وار خرچہ، ایک نظر میں۔",
+    body: "پچھلے 6 ماہ کا آمدنی-خرچہ رجحان اور قسم وار خرچہ، ایک نظر میں۔",
     accent: "text-emerald-300 bg-emerald-500/15 border-emerald-500/30",
   },
   {
@@ -104,7 +104,7 @@ const STEPS = [
   {
     n: "۰۱",
     title: "اے منشی کہہ کر مائیک دبائیں",
-    body: "Wake word سن کر منشی سننا شروع کر دیتا ہے — یا نیچے والے بٹن سے براہِ راست بولیں۔",
+    body: "آواز کی کلید (”اے منشی“) سن کر منشی سننا شروع کر دیتا ہے — یا نیچے والے بٹن سے براہِ راست بولیں۔",
   },
   {
     n: "۰۲",
@@ -119,12 +119,12 @@ const STEPS = [
 ];
 
 const PHRASES = [
-  { urdu: "پانچ سو روپے چائے پر خرچ", en: "Add expense — Rs. 500 on tea" },
-  { urdu: "بیس ہزار تنخواہ آمدی", en: "Add income — Rs. 20,000 salary" },
-  { urdu: "گاڑی کا پٹرول اڑا گیا", en: "Detected category: سفر (travel)" },
-  { urdu: "آخری انٹری واپس لو", en: "Undo the last entry" },
-  { urdu: "اس مہینے کا تجزیہ دو", en: "Ask the AI for a monthly analysis" },
-  { urdu: "بجٹ کے بارے میں بتاؤ", en: "Budget & savings advice" },
+  { urdu: "پانچ سو روپے چائے پر خرچ", hint: "یعنی: چائے پر 500 روپے کا خرچہ" },
+  { urdu: "بیس ہزار تنخواہ آمدی", hint: "یعنی: 20,000 روپے آمدنی درج کریں" },
+  { urdu: "گاڑی کا پٹرول اڑا گیا", hint: "یعنی: خودکار قسم پہچانی گئی — سفر" },
+  { urdu: "آخری انٹری واپس لو", hint: "یعنی: آخری درج شدہ انٹری منسوخ کریں" },
+  { urdu: "اس مہینے کا تجزیہ دو", hint: "یعنی: اے آئی سے ماہانہ تجزیہ کروائیں" },
+  { urdu: "بجٹ کے بارے میں بتاؤ", hint: "یعنی: بجٹ اور بچت کا مشورہ لیں" },
 ];
 
 const SECURITY = [
@@ -146,7 +146,7 @@ function SectionHeading({
 }) {
   return (
     <motion.div {...fadeUp} className="mx-auto mb-12 max-w-2xl text-center">
-      <p className="text-[11px] font-bold tracking-[0.3em] text-sky-300">{kicker}</p>
+      <p className="text-[11px] font-bold text-sky-300">{kicker}</p>
       <h2 className="nastaliq mt-4 text-3xl leading-[1.8] text-white sm:text-4xl">{title}</h2>
       <p className="mt-4 text-sm leading-7 text-white/55">{sub}</p>
     </motion.div>
@@ -178,7 +178,7 @@ export default function Landing() {
             <img src={logo} alt="صوتی بقیہ" className="size-9 rounded-xl border border-white/15" />
             <span className="leading-tight">
               <span className="nastaliq block text-sm text-white">صوتی بقیہ</span>
-              <span className="block text-[10px] tracking-[0.2em] text-white/40">SAUTI BAQAYA</span>
+              <span className="block text-[10px] text-white/40">اردو وائس فنانس اسسٹنٹ</span>
             </span>
           </Link>
 
@@ -270,12 +270,12 @@ export default function Landing() {
           transition={{ duration: 0.7, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
           className="relative rounded-3xl border border-white/15 bg-white/5 p-5 backdrop-blur-2xl sm:p-6"
         >
-          <div className="flex items-center justify-between text-[10px] tracking-widest text-white/40">
+          <div className="flex items-center justify-between text-[10px] text-white/40">
             <span className="flex items-center gap-1.5">
               <span className="size-2 animate-pulse rounded-full bg-emerald-400" />
-              WAKE WORD ACTIVE
+              آواز ایکٹو
             </span>
-            <span>SPECTRAL GRID</span>
+            <span>اسپیکٹرل گرڈ</span>
           </div>
 
           {/* Metrics */}
@@ -338,7 +338,7 @@ export default function Landing() {
       <section id="features" className="border-t border-white/10 bg-black/20 py-16 sm:py-20">
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            kicker="FEATURES"
+            kicker="خصوصیات"
             title="ایک کھاتہ، مکمل کنٹرول"
             sub="وائس، اے آئی، بجٹ اور بیک اپ — سب ایک ہی پینل میں، اردو میں۔"
           />
@@ -371,7 +371,7 @@ export default function Landing() {
       <section id="how" className="py-16 sm:py-20">
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            kicker="HOW IT WORKS"
+            kicker="طریقۂ کار"
             title="تین قدم، کھاتہ تیار"
             sub="لکھنا نہیں پڑتا — بولیں، تصدیق کریں، اور آگے بڑھیں۔"
           />
@@ -405,7 +405,7 @@ export default function Landing() {
       <section id="voice" className="border-y border-white/10 bg-black/20 py-16 sm:py-20">
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            kicker="VOICE SAMPLES"
+            kicker="وائس نمونے"
             title="یوں بولیے، یوں درج ہوگا"
             sub="اردو میں بولے گئے جملے منشی کو رقم، قسم اور تفصیل سب سمجھ آتی ہیں۔"
           />
@@ -422,8 +422,8 @@ export default function Landing() {
                   <Mic className="mt-2 size-4 shrink-0 text-sky-400" />
                   <span className="nastaliq">{phrase.urdu}</span>
                 </p>
-                <p className="mt-2 text-xs leading-6 text-white/40" dir="ltr">
-                  {phrase.en}
+                <p className="mt-2 text-xs leading-6 text-white/40">
+                  {phrase.hint}
                 </p>
               </motion.div>
             ))}
@@ -435,7 +435,7 @@ export default function Landing() {
       <section id="security" className="py-16 sm:py-20">
         <div className="mx-auto grid w-full max-w-6xl items-center gap-10 px-4 sm:px-6 lg:grid-cols-2">
           <motion.div {...fadeUp}>
-            <p className="text-[11px] font-bold tracking-[0.3em] text-sky-300">SECURITY & SYNC</p>
+            <p className="text-[11px] font-bold text-sky-300">سیکیورٹی اور سینک</p>
             <h2 className="nastaliq mt-4 text-3xl leading-[1.8] text-white sm:text-4xl">
               آپ کا ڈیٹا، آپ کے کنٹرول میں
             </h2>
