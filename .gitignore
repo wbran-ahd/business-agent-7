@@ -1,6 +1,9 @@
 .env.local
 node_modules
 dist
+# This project installs with bun (bun.lock is tracked). yarn.lock is a stray
+# leftover and would pin a third, stale dependency set if it were committed.
+yarn.lock
 # src/convex/_generated is committed on purpose: it holds the Convex API types
 # that the app and the CI typecheck import, and nothing typechecks without it.
 # `convex dev` / `convex deploy` regenerate it, so keep it in sync with src/convex.
