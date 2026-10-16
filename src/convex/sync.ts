@@ -3,12 +3,12 @@ import { v } from "convex/values";
 import { decryptSecret, encryptSecret, hashPayload } from "./crypto";
 import type { Id } from "./_generated/dataModel";
 import {
+  type MutationCtx,
+  type QueryCtx,
   internalMutation,
   internalQuery,
   mutation,
   query,
-  type MutationCtx,
-  type QueryCtx,
 } from "./_generated/server";
 
 /* ------------------------------------------------------------------ */
@@ -17,11 +17,11 @@ import {
 /** Guard rail so a huge ledger never blows a single mutation. */
 const MAX_RECORDS = 1000;
 /** Users touched per daily cron run — keeps each run comfortably short. */
-const MAX_CRON_USERS = 200;
+const MAX_CRON_USERS = 500;
 /** Gemini calls allowed per user per UTC day. */
-const AI_DAILY_LIMIT = 30;
+const AI_DAILY_LIMIT = 25;
 /** Cached insights stay fresh for this long. */
-const AI_CACHE_TTL_MS = 15 * 60 * 1000;
+const AI_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const recordValidator = v.object({
   localId: v.number(),
