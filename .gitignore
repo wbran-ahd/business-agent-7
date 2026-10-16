@@ -1,4 +1,6 @@
 .env.local
 node_modules
 dist
-src/convex/_generated
+# src/convex/_generated is committed on purpose: it holds the Convex API types
+# that the app and the CI typecheck import, and nothing typechecks without it.
+# `convex dev` / `convex deploy` regenerate it, so keep it in sync with src/convex.
