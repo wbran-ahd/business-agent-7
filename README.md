@@ -29,6 +29,31 @@ The convex server has a separate set of environment variables that are accessibl
 
 Currently, these variables include auth-specific keys: JWKS, JWT_PRIVATE_KEY, and SITE_URL.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request:
+
+| Job | Command | Requires |
+| --- | --- | --- |
+| Typecheck | `bun install --frozen-lockfile`, then `bun run typecheck` | nothing |
+| Convex push | `bun install --frozen-lockfile`, then `bunx convex deploy` | the `CONVEX_DEPLOY_KEY` repository secret |
+
+`src/convex/_generated` is committed on purpose: it holds the Convex API types that
+the app and the typecheck import, and nothing typechecks without it. `convex dev`
+and `convex deploy` regenerate it, so include any updates to it with changes to
+`src/convex`.
+
+The Convex push needs a Convex **preview** deploy key (dashboard → your project →
+Settings → Deploy Keys → Preview), stored in GitHub under Settings → Secrets and
+variables → Actions as `CONVEX_DEPLOY_KEY`. A preview key makes each pull request
+push to its own branch-named preview deployment; a production deploy key would
+push every pull request straight to production.
+
+This project has no cloud Convex deployment yet, so until that secret exists the
+Convex push job skips its push step and writes a warning to the run summary — no
+functions or schema are pushed, and the summary says so rather than reporting a
+pass.
+
 
 # Using Authentication (Important!)
 
