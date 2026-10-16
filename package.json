@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:preview": "node scripts/preview-dev.mjs",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
     "preview": "vite preview"
