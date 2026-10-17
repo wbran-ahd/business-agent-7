@@ -2,11 +2,29 @@ import { vlyPlugin } from "@vly-ai/integrations";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
+
+/**
+ * Link previews need absolute URLs (WhatsApp and Facebook do not resolve
+ * relative `og:image` paths), but the origin is only known per deployment.
+ * `%PUBLIC_ORIGIN%` in index.html is replaced at build/serve time from
+ * `VITE_PUBLIC_ORIGIN`; unset it and the tags stay relative, which is the right
+ * behaviour for localhost where no scraper will ever look.
+ */
+function publicOriginPlugin(mode: string): Plugin {
+  const env = loadEnv(mode, process.cwd(), "");
+  const origin = (env.VITE_PUBLIC_ORIGIN ?? "").trim().replace(/\/+$/, "");
+  return {
+    name: "sauti-public-origin",
+    transformIndexHtml(html) {
+      return html.replaceAll("%PUBLIC_ORIGIN%", origin);
+    },
+  };
+}
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), vlyPlugin(), tailwindcss()],
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), vlyPlugin(), tailwindcss(), publicOriginPlugin(mode)],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -105,4 +123,4 @@ export default defineConfig({
     // page lifecycle and full-reload picks up edits instead).
     hmr: false,
   },
-});
+}));

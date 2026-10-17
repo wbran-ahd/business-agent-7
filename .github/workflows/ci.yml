@@ -1,9 +1,12 @@
 name: CI
 
-# Pull requests only: this repo gates a PR on the typecheck and on the Convex
-# push, and never deploys anything itself.
+# Pull requests gate the typecheck, the ledger logic checks and the Convex
+# push. Pushes to main re-run the same checks so a broken merge is caught on the
+# branch itself; this workflow never deploys anything.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # A new commit on the same PR makes the previous run obsolete.
@@ -31,9 +34,16 @@ jobs:
       # without them.
       - name: Typecheck
         run: bun run typecheck
+      # `bun run test` is `bun scripts/verify-khata.ts` — pure ledger logic
+      # checks (amounts, budgets, CSV, formatting) that need no deployment.
+      - name: Ledger logic tests
+        run: bun run test
 
   convex-push:
     name: Convex push
+    # A preview deploy key belongs to a PR preview deployment, so this job only
+    # runs for pull requests — never on a push to main.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       # A Convex *preview* deploy key (Convex dashboard -> project -> Settings ->

@@ -8,6 +8,7 @@
  */
 import {
   CATEGORY_CATALOG,
+  clampTtsRate,
   collectMonthKeys,
   detectCategory,
   formatMonthName,
@@ -19,9 +20,11 @@ import {
   loadPrefs,
   loadData,
   nextId,
+  normalizeAccount,
   persistData,
   persistPrefs,
   validateAmount,
+  type AccountKind,
   type Budget,
   type DataState,
   type DigitStyle,
@@ -36,6 +39,8 @@ export type AddEntryInput = {
   amount: number;
   detail: string;
   category?: string;
+  /** Cash by default; voice entries never ask. */
+  account?: AccountKind;
 };
 
 export type KhataCommand =
@@ -111,6 +116,7 @@ export function makeRecord(input: AddEntryInput, id = nextId()): Entry {
     date: now.toLocaleDateString("ur-PK"),
     time: now.toLocaleTimeString("ur-PK", { hour: "2-digit", minute: "2-digit" }),
     timestamp: now.getTime(),
+    account: normalizeAccount(input.account),
   };
 }
 
@@ -175,6 +181,16 @@ export function useKhata() {
     (digitStyle: DigitStyle) => setPrefs((current) => ({ ...current, digitStyle })),
     [],
   );
+  /* Voice feedback settings — deliberately part of `Prefs`, so they persist
+     with the rest of the display preferences instead of a separate store. */
+  const setTtsEnabled = useCallback(
+    (ttsEnabled: boolean) => setPrefs((current) => ({ ...current, ttsEnabled })),
+    [],
+  );
+  const setTtsRate = useCallback(
+    (ttsRate: number) => setPrefs((current) => ({ ...current, ttsRate: clampTtsRate(ttsRate) })),
+    [],
+  );
 
   /* derived ------------------------------------------------------------- */
   const totals = useMemo(() => getTotals(data, activeMonth), [data, activeMonth]);
@@ -207,6 +223,8 @@ export function useKhata() {
     replaceAll,
     merge,
     setDigitStyle,
+    setTtsEnabled,
+    setTtsRate,
     totals,
     monthOptions,
     breakdown,

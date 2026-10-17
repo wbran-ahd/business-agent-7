@@ -93,12 +93,16 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
+    // Deferred: onSelect usually calls the parent's setState, which must not
+    // happen synchronously inside the effect body.
+    const initial = window.setTimeout(() => onSelect(api), 0)
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 
     return () => {
-      api?.off("select", onSelect)
+      window.clearTimeout(initial)
+      api.off("select", onSelect)
+      api.off("reInit", onSelect)
     }
   }, [api, onSelect])
 

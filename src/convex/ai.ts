@@ -42,6 +42,8 @@ const analysisRequest = v.object({
     v.object({ monthKey: v.string(), income: v.number(), expense: v.number() }),
   ),
   question: v.optional(v.string()),
+  /** Pre-computed purchase insights from the client (budgets, fast movers). */
+  purchaseHint: v.optional(v.string()),
 });
 
 type AnalysisInput = {
@@ -50,12 +52,15 @@ type AnalysisInput = {
   categories: { category: string; amount: number; share: number }[];
   history: { monthKey: string; income: number; expense: number }[];
   question?: string;
+  purchaseHint?: string;
 };
 
 const riskValidator = v.union(
   v.literal("low"),
   v.literal("medium"),
   v.literal("high"),
+  /* Not a financial judgement — the AI itself is unavailable. */
+  v.literal("unavailable"),
 );
 
 const responseSchema = {
@@ -103,6 +108,14 @@ function buildPrompt(input: AnalysisInput): string {
     " - topCategory: سب سے بڑی خرچ category یا '-'",
     ' - riskLevel: "low" یا "medium" یا "high" (آمدنی سے زیادہ خرچ ہو تو high)',
   ];
+  if (input.purchaseHint) {
+    lines.push(
+      "",
+      "خریداری کے اعداد و شمار (ایپ نے خود نکالے ہیں):",
+      input.purchaseHint,
+      "ان اعداد کو مدنظر رکھتے ہوئے اسٹاک اور خریداری کے بارے میں ٹھوس مشورہ دیں۔",
+    );
+  }
   if (input.question) {
     lines.push("", `صارف کا سوال: "${input.question}" — اسی کا جواب دیں۔`);
   }
@@ -121,25 +134,32 @@ type Insight = {
   spoken: string;
   insight: string;
   topCategory: string;
-  riskLevel: "low" | "medium" | "high";
+  riskLevel: "low" | "medium" | "high" | "unavailable";
 };
 
+/*
+ * Honest fallback: the old version returned `riskLevel: "low"`, which made a
+ * missing key look like a real “everything is fine” analysis. `unavailable`
+ * renders as a neutral badge, never as a green all-clear.
+ */
 function fallbackInsight(): Insight {
   return {
-    title: "ای آئی جائزہ",
+    title: "اے آئی دستیاب نہیں",
     spoken:
-      "ای آئی تجزیہ ابھی دستیاب نہیں، براہِ مہربانی سیٹنگز میں اپنی اے آئی کی چیک کریں۔",
+      "اے آئی تجزیہ ابھی دستیاب نہیں۔ براہِ مہربانی سیٹنگز میں اپنی اے آئی کی چیک کریں۔",
     insight:
       "AI تجزیہ کے لیے Settings میں Gemini API Key درج کریں، یا پروجیکٹ کی Keys / API keys tab میں GEMINI_API_KEY سیٹ کریں۔",
     topCategory: "-",
-    riskLevel: "low",
+    riskLevel: "unavailable",
   };
 }
 
 function normaliseInsight(raw: Record<string, unknown>): Insight {
   const risk = String(raw.riskLevel ?? "low").toLowerCase();
   const riskLevel: Insight["riskLevel"] =
-    risk === "high" || risk === "medium" || risk === "low" ? risk : "low";
+    risk === "high" || risk === "medium" || risk === "low" || risk === "unavailable"
+      ? risk
+      : "low";
   return {
     title: String(raw.title ?? "ای آئی جائزہ"),
     spoken: String(raw.spoken ?? ""),
@@ -159,7 +179,13 @@ async function callGemini(apiKey: string, body: string): Promise<Insight | null>
         body,
         signal: AbortSignal.timeout(45_000),
       });
-      if (!response.ok) continue;
+      if (!response.ok) {
+        /* A silent `continue` hid wrong model ids, revoked keys and exhausted
+           quotas. Log the status plus a short body so the failure is visible. */
+        const body = (await response.text().catch(() => "")).slice(0, 200);
+        console.warn(`[ai] ${model} failed: ${response.status} ${body}`);
+        continue;
+      }
 
       const text = extractText(await response.json()).trim();
       if (!text) continue;
@@ -195,7 +221,9 @@ export const analyze = action({
     if (!apiKey) apiKey = process.env.GEMINI_API_KEY ?? "";
     if (!apiKey) return fallbackInsight();
 
-    const quota = await ctx.runMutation(internal.sync.consumeAiQuota, {});
+    /* Check the quota without spending it — it is only consumed after a model
+       actually answers, so a failed call no longer burns the daily allowance. */
+    const quota = await ctx.runQuery(internal.sync.getAiQuota, {});
     if (quota.remaining === 0) {
       throw new Error("آج کی اے آئی کی حد ختم ہو چکی ہے — کل دوبارہ کوشش کریں۔");
     }
@@ -214,6 +242,8 @@ export const analyze = action({
     );
 
     if (!result) throw new Error("Gemini جائزہ ناکام: کوئی مدل جواب نہیں دے سکا");
+
+    await ctx.runMutation(internal.sync.consumeAiQuota, {});
 
     const userId = await getAuthUserId(ctx);
     await ctx.runMutation(internal.sync.putAiCache, {
