@@ -13,17 +13,68 @@
  *   • `useVoiceAssistant`  conversation state machine with timeouts & mutex
  *   • `useSync`            versioned cloud backup, settings and AI status
  *   • `Modal`              accessible dialogs (Escape, focus trap, ARIA)
- */import {
-  Modal } from "@/components/sauti/Modal";
+ */import { Modal } from "@/components/sauti/Modal";
+import { ShopPanel, type ShopTab } from "@/components/sauti/ShopPanel";
+import { StaffPinModal, type PinMode } from "@/components/sauti/StaffPinModal";
+import { QuickEntry } from "@/components/sauti/QuickEntry";
+import { InsightsPanel } from "@/components/sauti/InsightsPanel";
+import { BackupReminderBanner, BudgetAlertBanner } from "@/components/sauti/Alerts";
+import { Onboarding } from "@/components/sauti/Onboarding";
+import { PwaStatus } from "@/components/sauti/PwaStatus";
+import { ShareCard } from "@/components/sauti/ShareCard";
+import { ExportModal } from "@/components/sauti/ExportModal";
+import { UpgradeModal } from "@/components/sauti/UpgradeModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { api } from "@/convex/_generated/api";
+import { useBackupReminder } from "@/hooks/use-backup-reminder";
 import { useKhata } from "@/hooks/use-khata";
+import { useLicense } from "@/hooks/use-license";
+import { usePwa } from "@/hooks/use-pwa";
+import { BRAND, supportUrl } from "@/lib/brand";
+import {
+  buildReport,
+  downloadBlob,
+  reportFileBase,
+  reportHtml,
+  xlsxBlob,
+} from "@/lib/export-report";
+import { printHtmlDocument } from "@/lib/print";
+import {
+  finishOnboarding,
+  loadOnboarding,
+  persistOnboarding,
+  secondsSpent,
+  shouldShowOnboarding,
+  skipOnboarding,
+  startOnboarding,
+  type OnboardingStep,
+} from "@/lib/onboarding";
+import {
+  buildFieldReport,
+  clearEvents,
+  installId,
+  loadEvents,
+  track,
+} from "@/lib/telemetry";
+import { useStaffLock } from "@/hooks/use-staff-lock";
 import { useSync } from "@/hooks/use-sync";
 import { useVoiceAssistant } from "@/hooks/use-voice-assistant";
 import {
-  API_KEY_STORAGE,
+  activeBudgetAlerts,
+  budgetStatus,
+  purchaseInsights,
+} from "@/lib/insights";
+import { budgetNoticeText, markBudgetNotified, nextBudgetNotice } from "@/lib/budget-notices";
+import { speakUrdu } from "@/lib/tts";
+import {
+  ACCOUNT_CATALOG,
+  LEGACY_API_KEY_STORAGE,
+  MAX_RECORDS,
   buildCsv,
   CATEGORY_CATALOG,
+  detectCategory,
+  type AccountKind,
+  type DataState,
   dedupeEntries,
   entriesFromCsv,
   formatMonthName,
@@ -49,6 +100,7 @@ import {
   Menu,
   Mic,
   Settings,
+  Store,
   TrendingDown,
   Wallet,
 } from "lucide-react";
@@ -68,11 +120,26 @@ const inputCls =
 const smallBtn =
   "px-3 py-1.5 rounded-xl text-xs font-bold transition border font-sans flex items-center gap-1";
 
-type Draft = { amount: string; detail: string; category: string };
-const emptyDraft: Draft = { amount: "", detail: "", category: "عام" };
+type Draft = { amount: string; detail: string; category: string; account: AccountKind };
+const emptyDraft: Draft = { amount: "", detail: "", category: "عام", account: "cash" };
+
+/**
+ * First-run tour state.
+ *
+ * Starting the clock here (instead of an effect that also opens the modal)
+ * keeps render pure-ish and avoids the cascading setState the lint rule warns
+ * about: `startOnboarding` is idempotent, so StrictMode's double render is safe.
+ */
+function initialTourState() {
+  const loaded = loadOnboarding();
+  if (!shouldShowOnboarding(loaded)) return loaded;
+  const started = startOnboarding(loaded);
+  persistOnboarding(started);
+  return started;
+}
 
 /** Sidebar destinations — each one opens the view that owns the state. */
-type NavId = "ledger" | EntryType | "analytics" | "settings";
+type NavId = "ledger" | EntryType | "analytics" | "settings" | "shop";
 
 export default function SautiBaqaya() {
   const khata = useKhata();
@@ -97,6 +164,19 @@ export default function SautiBaqaya() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [shopTab, setShopTab] = useState<ShopTab>("customers");
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinMode, setPinMode] = useState<PinMode>("unlock");
+  const [budgetDismissed, setBudgetDismissed] = useState(false);
+  const staff = useStaffLock();
+  const backup = useBackupReminder();
+  const pwa = usePwa();
+  const license = useLicense();
+  const [onboarding, setOnboarding] = useState(initialTourState);
+  const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding(onboarding));
+  const [exportOpen, setExportOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { notifySuccess, notifyWarning } = useNotifications();
@@ -126,6 +206,9 @@ export default function SautiBaqaya() {
             expense: row.expense,
           })),
           question,
+          // The deterministic insights are handed to the model too, so its
+          // advice is based on the same figures the panel shows.
+          purchaseHint: insights.map((item) => item.headline).join(" | ") || undefined,
         },
       });
       const shaped: AiInsight = result;
@@ -168,7 +251,14 @@ export default function SautiBaqaya() {
 
   /* ---- voice wiring (declared after so the closures stay fresh) -------- */
   const voice = useVoiceAssistant({
-    onCommit: (type, amount, detail) => khata.addEntry({ type, amount, detail }),
+    onCommit: (type, amount, detail) => {
+      const ok = khata.addEntry({ type, amount, detail });
+      if (ok) {
+        track("entry_voice", { type });
+        speakBudgetWarning(type, amount, detail);
+      }
+      return ok;
+    },
     onUndo: () => {
       if (khata.data.undoStack.length === 0) return false;
       khata.undo();
@@ -177,6 +267,8 @@ export default function SautiBaqaya() {
     onAskAi: (question) => {
       void runAi(question);
     },
+    ttsEnabled: khata.prefs.ttsEnabled,
+    ttsRate: khata.prefs.ttsRate,
   });
 
   function handleUndoButton() {
@@ -186,28 +278,119 @@ export default function SautiBaqaya() {
     voice.announce(<span className="text-amber-300 font-bold">{message}</span>, message);
   }
 
-  /* ---- recurring incomes ----------------------------------------------- */
+  /* ---- recurring entries ----------------------------------------------- */
   /* The server materialises them (idempotently) for the signed-in user; this
      mirrors them into the local ledger so an active session sees them at once.
-     Matching is by label + amount + month, so the two paths converge instead of
-     doubling up. */
+     Matching is by kind + label + amount + month, so the two paths converge
+     instead of doubling up. */
   useEffect(() => {
     if (!sync.isAuthenticated || sync.recurring.length === 0) return;
     const monthKey = getCurrentMonthKey();
-    const due = sync.recurring.filter(
-      (entry) =>
-        entry.enabled &&
-        !khata.data.income.some(
-          (i) => monthOf(i) === monthKey && i.detail === entry.label && i.amount === entry.amount,
-        ),
-    );
+    const monthHas = (list: Entry[], entry: { label: string; amount: number }) =>
+      list.some(
+        (i) => monthOf(i) === monthKey && i.detail === entry.label && i.amount === entry.amount,
+      );
+    const due = sync.recurring.filter((entry) => {
+      if (!entry.enabled) return false;
+      const kind = entry.kind ?? "income";
+      return !monthHas(kind === "income" ? khata.data.income : khata.data.expense, entry);
+    });
     if (due.length === 0) return;
     khata.merge(
-      due.map((entry) => khataDraftToEntry(entry.label, entry.amount)),
-      [],
+      due
+        .filter((entry) => (entry.kind ?? "income") === "income")
+        .map((entry) => khataDraftToEntry(entry.label, entry.amount, "income")),
+      due
+        .filter((entry) => entry.kind === "expense")
+        .map((entry) => khataDraftToEntry(entry.label, entry.amount, "expense")),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sync.isAuthenticated, sync.recurring, khata.data.income]);
+  }, [sync.isAuthenticated, sync.recurring, khata.data.income, khata.data.expense]);
+
+  /* ---- first-run tour -------------------------------------------------- */
+  useEffect(() => {
+    // The modal state comes from the initializer above; this only records the
+    // event, so nothing here triggers a second render.
+    if (onboardingOpen) track("onboarding_start");
+  }, [onboardingOpen]);
+
+  function handleTourFinish() {
+    setOnboarding((current) => {
+      const next = finishOnboarding(current);
+      persistOnboarding(next);
+      track("onboarding_done", { seconds: secondsSpent(next) });
+      return next;
+    });
+    setOnboardingOpen(false);
+  }
+
+  function handleTourSkip() {
+    setOnboarding((current) => {
+      const next = skipOnboarding(current);
+      persistOnboarding(next);
+      track("onboarding_skip", { step: current.step });
+      return next;
+    });
+    setOnboardingOpen(false);
+  }
+
+  function handleTourAction(step: OnboardingStep) {
+    setOnboardingOpen(false);
+    if (step.id === "shop") openShop("customers");
+    else if (step.id === "backup") setSettingsOpen(true);
+    track("onboarding_action", { step: step.id });
+  }
+
+  /* ---- monthly report, Excel and field diagnostics ---------------------- */
+  function monthlyReport() {
+    return buildReport({
+      data: khata.data,
+      monthKey: khata.activeMonth,
+      owner: user?.name ?? "",
+      generatedAt: new Date(),
+    });
+  }
+
+  function exportReportPdf() {
+    const model = monthlyReport();
+    const rows = model.income.length + model.expense.length;
+    const ok = printHtmlDocument(
+      reportHtml(model, (value) => formatNumber(value, khata.prefs.digitStyle)),
+    );
+    track("export_pdf", { ok, rows });
+    if (!ok) notifyWarning("پرنٹ ونڈو نہیں کھل سکی", "براہِ کرم دوبارہ کوشش کریں۔");
+  }
+
+  function exportReportExcel() {
+    const model = monthlyReport();
+    const rows = model.income.length + model.expense.length;
+    downloadBlob(
+      xlsxBlob(model.sheets, model.generatedAt),
+      `${reportFileBase(model.monthKey)}.xlsx`,
+    );
+    backup.backedUp();
+    track("export_xlsx", { rows, sheets: model.sheets.length });
+    notifySuccess("Excel فائل ڈاؤن لوڈ ہو گئی", `${model.monthLabel} — خلاصہ، آمدنی، خرچہ`);
+  }
+
+  function exportDiagnostics() {
+    const report = buildFieldReport({
+      events: loadEvents(),
+      version: BRAND.version,
+      installId: installId(),
+    });
+    downloadBlob(
+      new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+      `sauti-baqaya-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+    );
+    track("diagnostics_export", { events: report.events.length });
+    notifySuccess("تشخیصی رپورٹ محفوظ ہو گئی", "اس میں رقم یا نام شامل نہیں ہیں۔");
+  }
+
+  function clearDiagnostics() {
+    clearEvents();
+    notifySuccess("لاگ صاف ہو گیا", "مقامی تشخیصی ریکارڈ خالی کر دیا گیا ہے۔");
+  }
 
   /* ---- ledger editing -------------------------------------------------- */
   function openModal(type: EntryType) {
@@ -222,7 +405,12 @@ export default function SautiBaqaya() {
 
   function startEdit(item: Entry) {
     setEditingId(item.id);
-    setEditDraft({ amount: String(item.amount), detail: item.detail, category: item.category });
+    setEditDraft({
+      amount: String(item.amount),
+      detail: item.detail,
+      category: item.category,
+      account: item.account ?? "cash",
+    });
   }
 
   function commitEdit(type: EntryType) {
@@ -232,17 +420,96 @@ export default function SautiBaqaya() {
       amount: Number.parseFloat(editDraft.amount),
       detail: editDraft.detail,
       category: editDraft.category,
+      account: editDraft.account,
     });
     if (!ok) return;
     setEditingId(null);
   }
 
+  /**
+   * Urdu overspend warning for an entry that just crossed a budget threshold.
+   * `null` when nothing new tripped — the notice is recorded so it never repeats
+   * for the same month/category/level.
+   */
+  function pendingBudgetWarning(
+    type: EntryType,
+    amount: number,
+    detail: string,
+  ): string | null {
+    if (type !== "expense") return null;
+    const preview: DataState = {
+      ...khata.data,
+      expense: [
+        ...khata.data.expense,
+        {
+          id: -1,
+          amount,
+          detail,
+          category: detectCategory(detail).name,
+          icon: "fa-receipt",
+          monthKey: khata.activeMonth,
+          date: "",
+          time: "",
+          timestamp: Date.now(),
+        },
+      ],
+    };
+    const notice = nextBudgetNotice(
+      budgetStatus(preview, khata.activeMonth, sync.budgets),
+      khata.activeMonth,
+    );
+    if (!notice) return null;
+    markBudgetNotified(notice.key);
+    return budgetNoticeText(notice.status, (value) =>
+      formatNumber(value, khata.prefs.digitStyle),
+    );
+  }
+
+  /** Speaks only the budget warning (the voice flow already confirmed the entry). */
+  function speakBudgetWarning(type: EntryType, amount: number, detail: string) {
+    const warning = pendingBudgetWarning(type, amount, detail);
+    if (!warning) return;
+    voice.announce(
+      <span className="text-rose-300 text-sm font-bold">⚠ {warning}</span>,
+      warning,
+    );
+  }
+
+  /** Manual/quick entries: one spoken confirmation, plus a warning when due. */
+  function afterEntryAdded(type: EntryType, amount: number, detail: string) {
+    const confirmation = `${amount} روپے درج ہو گئے۔`;
+    const warning = pendingBudgetWarning(type, amount, detail);
+    voice.announce(
+      <>
+        <span className="text-emerald-300 text-sm font-bold">✓ {confirmation}</span>
+        {warning && (
+          <>
+            <br />
+            <span className="text-rose-300 text-sm font-bold">⚠ {warning}</span>
+          </>
+        )}
+      </>,
+      warning ? `${confirmation} ${warning}` : confirmation,
+    );
+  }
+
   function addManualEntry(type: EntryType) {
-    if (!khata.addEntry({ type, amount: Number.parseFloat(manual.amount), detail: manual.detail, category: manual.category })) {
+    const detail = manual.detail;
+    if (
+      !khata.addEntry({
+        type,
+        amount: Number.parseFloat(manual.amount),
+        detail,
+        category: manual.category,
+        account: manual.account,
+      })
+    ) {
       return;
     }
     setManual(emptyDraft);
     setManualOpen(false);
+    track("entry_manual", { type, category: manual.category });
+    afterEntryAdded(type, Number.parseFloat(manual.amount), detail || manual.category);
   }
 
   /* ---- backup & restore ------------------------------------------------ */
@@ -254,6 +521,9 @@ export default function SautiBaqaya() {
     a.download = "sauti_baqaya_ultimate_report.csv";
     a.click();
     window.URL.revokeObjectURL(url);
+    // A downloaded CSV counts as a backup for the weekly reminder.
+    backup.backedUp();
+    track("export_csv");
   }
 
   function shareWhatsApp() {
@@ -266,6 +536,7 @@ export default function SautiBaqaya() {
     msg += `💰 کل رقم: Rs. ${khata.totals.totalIncome}\n`;
     msg += `💸 کل خرچہ: Rs. ${khata.totals.totalExpense}\n`;
     msg += `💵 موجودہ بقایا: Rs. ${khata.totals.balance}\n`;
+    track("share_whatsapp", { source: "ledger" });
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
   }
 
@@ -301,10 +572,10 @@ export default function SautiBaqaya() {
 
   /* ---- settings -------------------------------------------------------- */
   function openSettings() {
-    const local = localStorage.getItem(API_KEY_STORAGE);
-    if (!sync.hasCloudKey) setApiKeyDraft("••••••••");
-    else if (local) setApiKeyDraft(local);
-    else setApiKeyDraft("");
+    /* Older builds copied the Gemini key into plaintext localStorage. Purge it:
+       the key now lives only AES-GCM encrypted on the server. */
+    localStorage.removeItem(LEGACY_API_KEY_STORAGE);
+    setApiKeyDraft(sync.hasCloudKey ? "••••••••" : "");
     setSettingsOpen(true);
     setImportMsg("");
     sync.setStatus("");
@@ -316,18 +587,17 @@ export default function SautiBaqaya() {
       setSettingsOpen(false);
       return;
     }
-    if (sync.isAuthenticated) {
-      const ok = await sync.saveGeminiKey(key);
-      if (ok) localStorage.removeItem(API_KEY_STORAGE);
+    if (!sync.isAuthenticated) {
+      sync.setStatus(
+        "اے آئی کی صرف سرور پر انکرپٹ ہو کر محفوظ ہوتی ہے — پہلے سائن ان کریں۔",
+      );
       setSettingsOpen(false);
-      voice.speak("سیٹنگز اور کلاؤڈ اے آئی کی سیو ہو گئی ہے۔");
       return;
     }
-    localStorage.setItem(API_KEY_STORAGE, key);
-    sync.setStatus(
-      "کی اسی ڈیوائس پر محفوظ ہو گئی۔ سرور پر محفوظ کرنے کے لیے سائن ان کریں۔",
-    );
+    const ok = await sync.saveGeminiKey(key);
+    localStorage.removeItem(LEGACY_API_KEY_STORAGE);
     setSettingsOpen(false);
+    if (ok) voice.speak("سیٹنگز اور کلاؤڈ اے آئی کی محفوظ ہو گئی ہے۔");
   }
 
   async function handleUpload() {
@@ -337,6 +607,7 @@ export default function SautiBaqaya() {
     }
     const ok = await sync.upload();
     if (ok) {
+      backup.backedUp();
       notifySuccess("کلاؤڈ سینک محفوظ ہو گئی", sync.status);
     } else {
       notifyWarning("سینک مکمل نہیں ہو سکی", sync.status);
@@ -381,12 +652,26 @@ export default function SautiBaqaya() {
             ))}
           </select>
         </div>
-        <input
-          className={inputCls}
-          value={editDraft.detail}
-          onChange={(e) => setEditDraft({ ...editDraft, detail: e.target.value })}
-          placeholder={t("detailLabel")}
-        />
+        <div className="flex gap-2">
+          <input
+            className={inputCls}
+            value={editDraft.detail}
+            onChange={(e) => setEditDraft({ ...editDraft, detail: e.target.value })}
+            placeholder={t("detailLabel")}
+          />
+          <select
+            className={`${inputCls} shrink-0 basis-28`}
+            aria-label="کھاتہ"
+            value={editDraft.account}
+            onChange={(e) => setEditDraft({ ...editDraft, account: e.target.value as AccountKind })}
+          >
+            {ACCOUNT_CATALOG.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.label}
+              </option>
+            ))}
+          </select>
+        </div>
         {khata.validationError && <p className="text-[11px] text-rose-300">{khata.validationError}</p>}
         <div className="flex gap-2">
           <button
@@ -443,14 +728,16 @@ export default function SautiBaqaya() {
                 >
                   <i className="fas fa-pen text-xs"></i>
                 </button>
-                <button
-                  onClick={() => khata.removeEntry(type, item.id)}
-                  aria-label={t("delete")}
-                  title={t("delete")}
-                  className="text-rose-400/70 hover:text-rose-300 transition"
-                >
-                  <i className="fas fa-trash text-xs"></i>
-                </button>
+                {!staff.isStaff && (
+                  <button
+                    onClick={() => khata.removeEntry(type, item.id)}
+                    aria-label={t("delete")}
+                    title={t("delete")}
+                    className="text-rose-400/70 hover:text-rose-300 transition"
+                  >
+                    <i className="fas fa-trash text-xs"></i>
+                  </button>
+                )}
               </div>
             </div>
             <div className="text-white/90 text-sm leading-relaxed bg-white/5 p-2.5 rounded-lg border border-white/5">
@@ -506,14 +793,35 @@ export default function SautiBaqaya() {
 
   const alerts = khata.alertsFor(sync.budgets);
 
+  /* ---- spending signals (Phase 3) --------------------------------------- */
+  /* Plain derivations: cheap over a ledger capped at 1000 entries per kind, and
+     the React Compiler memoises them itself without conflicting with useMemo. */
+  const budgetStatuses = budgetStatus(khata.data, khata.activeMonth, sync.budgets);
+  const budgetAlerts = activeBudgetAlerts(budgetStatuses);
+  const insights = purchaseInsights(khata.data, khata.activeMonth, sync.budgets, {
+    format: (value) => formatNumber(value, khata.prefs.digitStyle),
+  });
+
   /* ---- dashboard shell -------------------------------------------------- */
-  const activeView: NavId = analyticsOpen
-    ? "analytics"
-    : settingsOpen
-      ? "settings"
-      : (historyType ?? "ledger");
+  const activeView: NavId = shopOpen
+    ? "shop"
+    : analyticsOpen
+      ? "analytics"
+      : settingsOpen
+        ? "settings"
+        : (historyType ?? "ledger");
 
   function goHome() {
+    setHistoryType(null);
+    setAnalyticsOpen(false);
+    setSettingsOpen(false);
+    setShopOpen(false);
+    setNavOpen(false);
+  }
+
+  function openShop(tab: ShopTab) {
+    setShopTab(tab);
+    setShopOpen(true);
     setHistoryType(null);
     setAnalyticsOpen(false);
     setSettingsOpen(false);
@@ -563,6 +871,12 @@ export default function SautiBaqaya() {
       },
     },
     {
+      id: "shop",
+      label: "دکان (گاہک/سپلائر)",
+      icon: Store,
+      onClick: () => openShop("customers"),
+    },
+    {
       id: "settings",
       label: "سیٹنگز",
       icon: Settings,
@@ -573,10 +887,15 @@ export default function SautiBaqaya() {
     },
   ];
 
+  /* Salesman mode hides the owner-only destinations. */
+  const visibleNavItems = staff.isStaff
+    ? navItems.filter((item) => item.id !== "settings")
+    : navItems;
+
   function renderNav(current: NavId) {
     return (
       <nav className="flex flex-col gap-1.5" aria-label="مینو">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = current === item.id;
           const Icon = item.icon;
           return (
@@ -744,12 +1063,32 @@ export default function SautiBaqaya() {
                 <i className="fas fa-chart-pie"></i> {t("charts")}
               </button>
               <button
-                onClick={openSettings}
-                aria-label={t("settingsTitle")}
-                className="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-xl text-xs transition"
+                onClick={() => openShop("customers")}
+                aria-label="دکان کا کھاتہ"
+                title="گاہک اور سپلائر"
+                className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 px-2.5 py-1.5 rounded-xl text-xs transition"
               >
-                <i className="fas fa-key"></i>
+                <i className="fas fa-store"></i>
               </button>
+              {!staff.isStaff && (
+                <>
+                  <button
+                    onClick={() => setExportOpen(true)}
+                    aria-label="رپورٹ ڈاؤن لوڈ"
+                    title="PDF / Excel رپورٹ"
+                    className="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-xl text-xs transition"
+                  >
+                    <i className="fas fa-file-export"></i>
+                  </button>
+                  <button
+                    onClick={openSettings}
+                    aria-label={t("settingsTitle")}
+                    className="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-xl text-xs transition"
+                  >
+                    <i className="fas fa-key"></i>
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -761,17 +1100,54 @@ export default function SautiBaqaya() {
               </div>
               <span>{t("voiceActiveHint")}</span>
             </div>
-            <button
-              onClick={exportData}
-              className="px-3 py-1 rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white transition"
-            >
-              <i className="fas fa-file-csv ml-1"></i> {t("csvBackup")}
-            </button>
+            {staff.isStaff ? (
+              <button
+                onClick={() => {
+                  staff.clearError();
+                  setPinMode("unlock");
+                  setPinOpen(true);
+                }}
+                className="px-3 py-1 rounded-full border border-amber-500/40 text-amber-300 transition hover:bg-amber-500/15"
+              >
+                🔒 سیلز مین موڈ — مالک بنیں
+              </button>
+            ) : (
+              <button
+                onClick={exportData}
+                className="px-3 py-1 rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white transition"
+              >
+                <i className="fas fa-file-csv ml-1"></i> {t("csvBackup")}
+              </button>
+            )}
           </div>
         </div>
 
         {/* Middle Content Area */}
         <div className="p-5 sm:p-6 flex-1 flex flex-col justify-between z-10">
+          {/* Offline / install / update — renders nothing when not applicable */}
+          <PwaStatus pwa={pwa} onInstalled={() => track("install_accepted")} />
+
+          {/* Weekly backup nudge — only when an export is actually overdue */}
+          {backup.due.due && (
+            <BackupReminderBanner
+              days={backup.due.days}
+              onBackup={() => {
+                exportData();
+                notifySuccess("بیک اپ ڈاؤن لوڈ ہو گیا", "اگلی یاد دہانی سات دن بعد آئے گی۔");
+              }}
+              onSnooze={() => backup.snooze()}
+            />
+          )}
+
+          {/* Overspending / near-limit banner */}
+          {!budgetDismissed && (
+            <BudgetAlertBanner
+              statuses={budgetAlerts}
+              format={(value) => formatNumber(value, khata.prefs.digitStyle)}
+              onDismiss={() => setBudgetDismissed(true)}
+            />
+          )}
+
           {/* Top Metric Row: 3 Boxes in One Single Line */}
           <div className="grid grid-cols-3 gap-2 sm:gap-3 w-full mb-6">
             {/* 1. کل رقم (Income Box) */}
@@ -836,6 +1212,25 @@ export default function SautiBaqaya() {
                 {t("undoLast")}
               </button>
             </div>
+
+            {/* Quick numeric chips — the same record shape as a spoken entry */}
+            <QuickEntry
+              prefs={khata.prefs}
+              onCommit={(input) => {
+                const ok = khata.addEntry({
+                  type: input.type,
+                  amount: input.amount,
+                  detail: input.detail,
+                  category: input.category,
+                  account: input.account,
+                });
+                if (ok) {
+                  track("entry_quick", { type: input.type });
+                  afterEntryAdded(input.type, input.amount, input.detail);
+                }
+                return ok;
+              }}
+            />
           </div>
         </div>
 
@@ -961,12 +1356,26 @@ export default function SautiBaqaya() {
                 ))}
               </select>
             </div>
-            <input
-              className={inputCls}
-              placeholder={t("detailOptional")}
-              value={manual.detail}
-              onChange={(e) => setManual({ ...manual, detail: e.target.value })}
-            />
+            <div className="flex gap-2">
+              <input
+                className={inputCls}
+                placeholder={t("detailOptional")}
+                value={manual.detail}
+                onChange={(e) => setManual({ ...manual, detail: e.target.value })}
+              />
+              <select
+                className={`${inputCls} shrink-0 basis-28`}
+                aria-label="کھاتہ"
+                value={manual.account}
+                onChange={(e) => setManual({ ...manual, account: e.target.value as AccountKind })}
+              >
+                {ACCOUNT_CATALOG.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             {khata.validationError && (
               <p className="text-[11px] text-rose-300">{khata.validationError}</p>
             )}
@@ -1034,6 +1443,8 @@ export default function SautiBaqaya() {
           </Suspense>
         </ErrorBoundary>
 
+        <InsightsPanel insights={insights} />
+
         {alerts.length > 0 && (
           <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 mb-3 text-xs text-rose-200">
             {alerts.map((alert) => (
@@ -1059,6 +1470,24 @@ export default function SautiBaqaya() {
           {aiBusy ? t("aiRunning") : t("aiAnalyze")}
         </button>
 
+        {/* The same numbers the panel shows, in shareable formats */}
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={exportReportPdf}
+            className={`${smallBtn} justify-center bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/40`}
+          >
+            <i className="fas fa-file-pdf"></i> PDF رپورٹ
+          </button>
+          <button
+            type="button"
+            onClick={exportReportExcel}
+            className={`${smallBtn} justify-center bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/40`}
+          >
+            <i className="fas fa-file-excel"></i> Excel رپورٹ
+          </button>
+        </div>
+
         {!sync.aiHasKey && (
           <p className="text-[11px] text-white/50 mt-2">
             اے آئی کے لیے ⚙️ سیٹنگز میں Gemini API Key درج کریں۔
@@ -1078,18 +1507,22 @@ export default function SautiBaqaya() {
               <span className="font-bold text-sky-200">🤖 {insight.title}</span>
               <span
                 className={`px-2 py-0.5 rounded-full border text-[10px] ${
-                  insight.riskLevel === "high"
-                    ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
-                    : insight.riskLevel === "medium"
-                      ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
-                      : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                  insight.riskLevel === "unavailable"
+                    ? "bg-slate-500/20 text-slate-300 border-slate-400/40"
+                    : insight.riskLevel === "high"
+                      ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
+                      : insight.riskLevel === "medium"
+                        ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                        : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
                 }`}
               >
-                {insight.riskLevel === "high"
-                  ? "خطرہ زیادہ"
-                  : insight.riskLevel === "medium"
-                    ? "انتہائی"
-                    : "ٹھیک ہے"}
+                {insight.riskLevel === "unavailable"
+                  ? "دستیاب نہیں"
+                  : insight.riskLevel === "high"
+                    ? "خطرہ زیادہ"
+                    : insight.riskLevel === "medium"
+                      ? "انتہائی"
+                      : "ٹھیک ہے"}
               </span>
             </div>
             <p>{insight.insight}</p>
@@ -1125,7 +1558,10 @@ export default function SautiBaqaya() {
 
         {/* Gemini key */}
         <div className="space-y-2 text-sm text-white/80 mb-5">
-          <p>ذہین جیمینی اے آئی اور کلاؤڈ انٹیلی جنس کے لیے اپنی اے آئی کی (API Key) درج کریں:</p>
+          <p>
+            ذہین جیمینی اے آئی کے لیے اپنی اے آئی کی (API Key) درج کریں — یہ سرور پر
+            انکرپٹ ہو کر محفوظ ہوتی ہے، اس لیے سائن ان ضروری ہے:
+          </p>
           <input
             type="password"
             value={apiKeyDraft}
@@ -1208,10 +1644,10 @@ export default function SautiBaqaya() {
           </button>
         </div>
 
-        {/* Recurring income */}
+        {/* Recurring entries */}
         <div className="mb-5">
           <h3 className="text-sm font-bold text-white/85 mb-2">
-            <i className="fas fa-rotate text-emerald-300 ml-1"></i> ماہانہ آمدنی (خودکار)
+            <i className="fas fa-rotate text-emerald-300 ml-1"></i> ماہانہ خودکار اندراج
           </h3>
           {sync.recurring.length > 0 && (
             <div className="space-y-1.5 mb-2">
@@ -1230,7 +1666,12 @@ export default function SautiBaqaya() {
                     }
                   />
                   <span className="flex-1 text-white/80">{entry.label}</span>
-                  <span className="text-emerald-300">
+                  <span className="text-[10px] text-white/40">
+                    {entry.kind === "expense" ? "خرچہ" : "آمدنی"}
+                  </span>
+                  <span
+                    className={entry.kind === "expense" ? "text-rose-300" : "text-emerald-300"}
+                  >
                     {formatNumber(entry.amount, khata.prefs.digitStyle)} روپے
                   </span>
                   <button
@@ -1247,10 +1688,10 @@ export default function SautiBaqaya() {
             </div>
           )}
           <RecurringAdder
-            onAdd={(label, amount) =>
+            onAdd={(label, amount, kind) =>
               sync.setRecurring((prev) => [
                 ...prev,
-                { id: `${Date.now()}`, label, amount, enabled: true },
+                { id: `${Date.now()}`, label, amount, enabled: true, kind },
               ])
             }
           />
@@ -1258,7 +1699,7 @@ export default function SautiBaqaya() {
             onClick={() => void sync.persistSettings()}
             className={`${smallBtn} w-full mt-2 bg-white/10 hover:bg-white/20 text-white border-white/20`}
           >
-            آمدنی محفوظ کریں
+            ماہانہ اندراج محفوظ کریں
           </button>
         </div>
 
@@ -1329,6 +1770,231 @@ export default function SautiBaqaya() {
           )}
           <p className="text-[11px] text-white/40 mt-2">ورژن: {sync.cloudVersion}</p>
           {sync.status && <p className="text-[11px] text-white/60 mt-1">{sync.status}</p>}
+          {sync.capWarning && (
+            <p className="text-[11px] text-amber-300/90 mt-1">
+              نوٹ: کلاؤڈ اپ لوڈ میں ہر قسم کی صرف تازہ ترین {MAX_RECORDS} انٹریز سینک ہوتی
+              ہیں — باقی انٹریز اس ڈیوائس پر محفوظ ہیں۔
+            </p>
+          )}
+        </div>
+
+        {/* Urdu voice feedback */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-volume-high text-emerald-300 ml-1"></i> اردو آواز (تصدیق)
+          </h3>
+          <label className="flex items-center justify-between rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-white/75">
+            <span>اندراج کے بعد آواز میں تصدیق سنیں</span>
+            <input
+              type="checkbox"
+              checked={khata.prefs.ttsEnabled}
+              onChange={(e) => khata.setTtsEnabled(e.target.checked)}
+            />
+          </label>
+          <div className="mt-2 flex gap-2">
+            {[
+              { rate: 0.85, label: "آہستہ" },
+              { rate: 0.95, label: "عام" },
+              { rate: 1.1, label: "تیز" },
+            ].map((option) => (
+              <button
+                key={option.rate}
+                type="button"
+                aria-pressed={khata.prefs.ttsRate === option.rate}
+                onClick={() => khata.setTtsRate(option.rate)}
+                className={`${smallBtn} flex-1 ${
+                  khata.prefs.ttsRate === option.rate
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    : "bg-white/5 text-white/60 border-white/15 hover:bg-white/10"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              speakUrdu("صوتی بقیہ — آواز کی جانچ۔ پانچ سو روپے درج ہو گئے۔", {
+                enabled: true,
+                rate: khata.prefs.ttsRate,
+              })
+            }
+            className={`${smallBtn} w-full mt-2 bg-white/10 hover:bg-white/20 text-white border-white/20`}
+          >
+            <i className="fas fa-play"></i> آواز کی جانچ کریں
+          </button>
+          <p className="mt-2 text-[10px] leading-relaxed text-white/40">
+            فون میں اردو آواز موجود ہو تو خودکار منتخب ہو جاتی ہے؛ نہ ہو تو لہجہ انگریزی ہو سکتا ہے۔
+          </p>
+        </div>
+
+        {/* Monthly report: PDF (print) and real Excel */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-file-export text-rose-300 ml-1"></i> رپورٹ ڈاؤن لوڈ
+          </h3>
+          <p className="text-[11px] leading-5 text-white/45 mb-2">
+            موجودہ مہینے ({formatMonthName(khata.activeMonth)}) کا خلاصہ، اخراجات کی تقسیم، کھاتے اور
+            ہر اندراج۔ PDF کے لیے پرنٹ ڈائیلاگ میں «Save as PDF» منتخب کریں۔
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={exportReportPdf}
+              className={`${smallBtn} flex-1 bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/40`}
+            >
+              <i className="fas fa-file-pdf"></i> PDF / پرنٹ
+            </button>
+            <button
+              type="button"
+              onClick={exportReportExcel}
+              className={`${smallBtn} flex-1 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/40`}
+            >
+              <i className="fas fa-file-excel"></i> Excel (.xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={exportData}
+              className={`${smallBtn} bg-white/10 hover:bg-white/20 text-white border-white/20`}
+            >
+              <i className="fas fa-file-csv"></i> CSV
+            </button>
+          </div>
+        </div>
+
+        {/* Brand, link preview and share */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-share-nodes text-sky-300 ml-1"></i> برانڈ اور واٹس ایپ پری ویو
+          </h3>
+          <ShareCard />
+        </div>
+
+        {/* Pro / local payments */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-crown text-amber-300 ml-1"></i> پرو (جاز کیش / ایزی پیسہ)
+          </h3>
+          <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+            <span className="text-[11px] text-white/70">{license.snapshot.label}</span>
+            <button
+              type="button"
+              onClick={() => setUpgradeOpen(true)}
+              className={`${smallBtn} bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-500/40`}
+            >
+              پلان دیکھیں
+            </button>
+          </div>
+        </div>
+
+        {/* Support & field diagnostics */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-headset text-[#25D366] ml-1"></i> مدد اور تشخیص
+          </h3>
+          {supportUrl().configured ? (
+            <a
+              href={supportUrl("مدد").url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => track("support_open", { source: "settings" })}
+              className={`${smallBtn} w-full justify-center bg-[#25D366]/15 hover:bg-[#25D366]/25 text-[#25D366] border-[#25D366]/40 no-underline`}
+            >
+              <i className="fab fa-whatsapp text-base"></i> واٹس ایپ پر مدد لیں
+            </a>
+          ) : (
+            <p className="text-[11px] leading-5 text-white/45">
+              سیدھی واٹس ایپ مدد کے لیے <span className="font-sans">VITE_SUPPORT_WHATSAPP</span> سیٹ
+              کریں — تب یہاں اور نیچے تیرنے والا بٹن نظر آئے گا۔
+            </p>
+          )}
+          <p className="mt-2 font-sans text-[10px] text-white/35">
+            {BRAND.name} · ورژن {BRAND.version}
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={exportDiagnostics}
+              className={`${smallBtn} flex-1 bg-white/10 hover:bg-white/20 text-white border-white/20`}
+            >
+              <i className="fas fa-clipboard-list"></i> تشخیصی رپورٹ
+            </button>
+            <button
+              type="button"
+              onClick={clearDiagnostics}
+              className={`${smallBtn} bg-white/5 hover:bg-white/10 text-white/60 border-white/15`}
+            >
+              لاگ صاف
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] leading-5 text-white/35">
+            رپورٹ میں صرف فیچر کے استعمال کی گنتی اور ڈیوائس کی قسم ہوتی ہے — رقم، نام یا تفصیل نہیں۔
+          </p>
+        </div>
+
+        {/* Staff PIN & salesman mode */}
+        <div className="mb-5">
+          <h3 className="text-sm font-bold text-white/85 mb-2">
+            <i className="fas fa-user-shield text-amber-300 ml-1"></i> PIN اور سیلز مین موڈ
+          </h3>
+          <p className="text-[11px] text-white/45 mb-2">
+            سیلز مین موڈ میں سیٹنگز، CSV بیک اپ اور حذف کے بٹن چھپ جاتے ہیں — مالک موڈ میں واپس
+            آنے کے لیے PIN درکار ہوگا۔
+          </p>
+          {staff.hasPin ? (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    staff.clearError();
+                    setPinMode("set");
+                    setPinOpen(true);
+                  }}
+                  className={`${smallBtn} flex-1 bg-white/10 hover:bg-white/20 text-white border-white/20`}
+                >
+                  <i className="fas fa-key"></i> PIN تبدیل کریں
+                </button>
+                <button
+                  onClick={() => {
+                    staff.clearError();
+                    setPinMode("remove");
+                    setPinOpen(true);
+                  }}
+                  className={`${smallBtn} flex-1 bg-white/10 hover:bg-white/20 text-white border-white/20`}
+                >
+                  <i className="fas fa-unlock"></i> PIN ہٹائیں
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  if (!staff.lockOwner()) return;
+                  setSettingsOpen(false);
+                  notifyWarning(
+                    "سیلز مین موڈ آن ہے",
+                    "مالک موڈ میں واپس آنے کے لیے PIN درکار ہوگا۔",
+                  );
+                }}
+                className={`${smallBtn} w-full bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/40`}
+              >
+                🔒 سیلز مین موڈ آن کریں
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                staff.clearError();
+                setPinMode("set");
+                setPinOpen(true);
+              }}
+              className={`${smallBtn} w-full bg-white/10 hover:bg-white/20 text-white border-white/20`}
+            >
+              <i className="fas fa-lock"></i> PIN سیٹ کریں
+            </button>
+          )}
+          {staff.error && !pinOpen && (
+            <p className="text-[11px] text-rose-300 mt-2">{staff.error}</p>
+          )}
         </div>
 
         <ConfirmDialog
@@ -1342,6 +2008,95 @@ export default function SautiBaqaya() {
           loading={sync.busy}
         />
       </Modal>
+
+      {/* 60-second first-run tour */}
+      <Onboarding
+        open={onboardingOpen}
+        step={onboarding.step}
+        onStep={(step) => {
+          setOnboarding((current) => {
+            const next = { ...current, step };
+            persistOnboarding(next);
+            return next;
+          });
+        }}
+        onFinish={handleTourFinish}
+        onSkip={handleTourSkip}
+        onAction={handleTourAction}
+      />
+
+      {/* Report export picker (PDF / Excel / CSV) */}
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        monthLabel={formatMonthName(khata.activeMonth)}
+        incomeCount={khata.data.income.filter((i) => monthOf(i) === khata.activeMonth).length}
+        expenseCount={khata.data.expense.filter((i) => monthOf(i) === khata.activeMonth).length}
+        onPdf={exportReportPdf}
+        onExcel={exportReportExcel}
+        onCsv={exportData}
+      />
+
+      {/* JazzCash / EasyPaisa and activation */}
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        snapshot={license.snapshot}
+        installId={license.installId}
+        onActivate={license.activate}
+      />
+
+      {/* Direct WhatsApp support — only when a support number is configured */}
+      {supportUrl().configured && (
+        <a
+          href={supportUrl("مدد").url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => track("support_open", { source: "fab" })}
+          aria-label="واٹس ایپ پر مدد"
+          title="واٹس ایپ پر مدد"
+          className="fixed bottom-4 left-4 z-40 flex size-11 items-center justify-center rounded-full border border-[#25D366]/40 bg-slate-950/80 text-[#25D366] shadow-xl backdrop-blur transition hover:bg-[#25D366]/20"
+        >
+          <i className="fab fa-whatsapp text-xl"></i>
+        </a>
+      )}
+
+      {/* Shop: customers, suppliers, daybook and account balances */}
+      <ShopPanel
+        open={shopOpen}
+        tab={shopTab}
+        onTabChange={setShopTab}
+        onClose={() => setShopOpen(false)}
+        data={khata.data}
+        prefs={khata.prefs}
+        isStaff={staff.isStaff}
+        onBackedUp={backup.backedUp}
+      />
+
+      {/* PIN lock / salesman mode */}
+      <StaffPinModal
+        open={pinOpen}
+        mode={pinMode}
+        busy={staff.busy}
+        error={staff.error}
+        onClose={() => {
+          setPinOpen(false);
+          staff.clearError();
+        }}
+        onSubmit={(pin, confirm) => {
+          void (async () => {
+            if (pinMode === "set") {
+              if (await staff.savePin(pin, confirm)) setPinOpen(false);
+              return;
+            }
+            if (pinMode === "unlock") {
+              if (await staff.unlock(pin)) setPinOpen(false);
+              return;
+            }
+            if (await staff.clearPin(pin)) setPinOpen(false);
+          })();
+        }}
+      />
     </div>
   );
 }
@@ -1350,15 +2105,35 @@ export default function SautiBaqaya() {
 function RecurringAdder({
   onAdd,
 }: {
-  onAdd: (label: string, amount: number) => void;
+  onAdd: (label: string, amount: number, kind: EntryType) => void;
 }) {
-  const [draft, setDraft] = useState({ label: "", amount: "" });
+  const [draft, setDraft] = useState<{
+    label: string;
+    amount: string;
+    kind: EntryType;
+  }>({ label: "", amount: "", kind: "income" });
+  const kindBtn = (kind: EntryType, label: string) => (
+    <button
+      type="button"
+      aria-pressed={draft.kind === kind}
+      onClick={() => setDraft({ ...draft, kind })}
+      className={`flex-1 rounded-xl px-2 py-1.5 border text-xs font-bold transition font-sans ${
+        draft.kind === kind
+          ? kind === "income"
+            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+            : "bg-rose-500/20 text-rose-300 border-rose-500/40"
+          : "bg-white/5 text-white/60 border-white/15 hover:bg-white/10"
+      }`}
+    >
+      {label}
+    </button>
+  );
   return (
     <>
       <div className="flex gap-2">
         <input
           className={inputCls}
-          placeholder="عنوان (مثلاً تنخواہ)"
+          placeholder="عنوان (مثلاً کرایہ)"
           value={draft.label}
           onChange={(e) => setDraft({ ...draft, label: e.target.value })}
         />
@@ -1370,13 +2145,17 @@ function RecurringAdder({
           onChange={(e) => setDraft({ ...draft, amount: e.target.value })}
         />
       </div>
+      <div className="flex gap-2 mt-2">
+        {kindBtn("income", "آمدنی")}
+        {kindBtn("expense", "خرچہ")}
+      </div>
       <button
         onClick={() => {
           const amount = Number.parseFloat(draft.amount);
           const label = draft.label.trim();
           if (!label || !Number.isFinite(amount) || amount <= 0) return;
-          onAdd(label, amount);
-          setDraft({ label: "", amount: "" });
+          onAdd(label, amount, draft.kind);
+          setDraft({ label: "", amount: "", kind: draft.kind });
         }}
         className={`${smallBtn} w-full mt-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40`}
       >
@@ -1455,14 +2234,18 @@ function HorizonArc({ listening }: { listening: boolean }) {
 }
 
 /** Mirrors a recurring rule into a local entry for the current month. */
-function khataDraftToEntry(label: string, amount: number): Entry {
+function khataDraftToEntry(
+  label: string,
+  amount: number,
+  kind: EntryType = "income",
+): Entry {
   const now = new Date();
   return {
     id: nextId(),
     amount,
     detail: label,
-    category: "ماہانہ آمدنی",
-    icon: "fa-money-bill-wave",
+    category: kind === "income" ? "ماہانہ آمدنی" : "ماہانہ خرچہ",
+    icon: kind === "income" ? "fa-money-bill-wave" : "fa-file-invoice-dollar",
     monthKey: getCurrentMonthKey(),
     date: now.toLocaleDateString("ur-PK"),
     time: now.toLocaleTimeString("ur-PK", { hour: "2-digit", minute: "2-digit" }),

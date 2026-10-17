@@ -23,6 +23,13 @@ const AI_DAILY_LIMIT = 25;
 /** Cached insights stay fresh for this long. */
 const AI_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+const accountKind = v.union(
+  v.literal("cash"),
+  v.literal("jazzcash"),
+  v.literal("easypaisa"),
+  v.literal("bank"),
+);
+
 const recordValidator = v.object({
   localId: v.number(),
   kind: v.union(v.literal("income"), v.literal("expense")),
@@ -34,6 +41,7 @@ const recordValidator = v.object({
   date: v.string(),
   time: v.string(),
   timestamp: v.number(),
+  account: v.optional(accountKind),
 });
 
 const budgetValidator = v.object({ category: v.string(), limit: v.number() });
@@ -43,6 +51,8 @@ const recurringValidator = v.object({
   label: v.string(),
   amount: v.number(),
   enabled: v.boolean(),
+  /* Optional so rules saved before expenses were supported keep working. */
+  kind: v.optional(v.union(v.literal("income"), v.literal("expense"))),
 });
 
 type RecordRow = {
@@ -56,6 +66,7 @@ type RecordRow = {
   date: string;
   time: string;
   timestamp: number;
+  account?: "cash" | "jazzcash" | "easypaisa" | "bank";
 };
 
 function currentMonthKey(now: Date = new Date()): string {
@@ -74,6 +85,52 @@ async function getSyncDoc(ctx: QueryCtx | MutationCtx, userId: Id<"users">) {
     .query("syncState")
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .unique();
+}
+
+/** Upserts a batch of records by `localId`; shared by the single-shot and
+ *  chunked upload mutations so both write rows identically. */
+async function writeRecords(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  incoming: RecordRow[],
+): Promise<number> {
+  if (incoming.length === 0) return 0;
+  const existing = await ctx.db
+    .query("records")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  const byLocalId = new Map(existing.map((row) => [row.localId, row]));
+
+  for (const record of incoming) {
+    const match = byLocalId.get(record.localId);
+    if (match) {
+      const unchanged =
+        match.kind === record.kind &&
+        match.amount === record.amount &&
+        match.detail === record.detail &&
+        match.category === record.category &&
+        match.monthKey === record.monthKey &&
+        match.timestamp === record.timestamp &&
+        match.account === record.account;
+      if (!unchanged) await ctx.db.patch(match._id, { ...record });
+    } else {
+      await ctx.db.insert("records", { userId, ...record });
+    }
+  }
+  return incoming.length;
+}
+
+/** Advances the optimistic-concurrency token after a successful write. */
+async function bumpVersion(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  sync: { _id: Id<"syncState">; version: number } | null,
+): Promise<number> {
+  const nextVersion = (sync?.version ?? 0) + 1;
+  if (sync) await ctx.db.patch(sync._id, { version: nextVersion, updatedAt: Date.now() });
+  else
+    await ctx.db.insert("syncState", { userId, version: nextVersion, updatedAt: Date.now() });
+  return nextVersion;
 }
 
 /* ------------------------------------------------------------------ */
@@ -109,6 +166,7 @@ export const listRecords = query({
         date: row.date,
         time: row.time,
         timestamp: row.timestamp,
+        account: row.account,
       })) satisfies RecordRow[],
     };
   },
@@ -137,37 +195,82 @@ export const syncRecords = mutation({
       .query("records")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
-    const byLocalId = new Map(existing.map((row) => [row.localId, row]));
 
-    const incoming = records.slice(0, MAX_RECORDS);
+    /* Keep the newest rows. `slice(0, MAX_RECORDS)` used to keep the oldest,
+       so every entry recorded after the first 1000 was silently dropped. */
+    const incoming = records.slice(-MAX_RECORDS);
     const keep = new Set(incoming.map((record) => record.localId));
 
     for (const row of existing) {
       if (!keep.has(row.localId)) await ctx.db.delete(row._id);
     }
 
-    for (const record of incoming) {
-      const match = byLocalId.get(record.localId);
-      if (match) {
-        const unchanged =
-          match.kind === record.kind &&
-          match.amount === record.amount &&
-          match.detail === record.detail &&
-          match.category === record.category &&
-          match.monthKey === record.monthKey &&
-          match.timestamp === record.timestamp;
-        if (!unchanged) await ctx.db.patch(match._id, { ...record });
-      } else {
-        await ctx.db.insert("records", { userId, ...record });
+    const synced = await writeRecords(ctx, userId, incoming);
+    const nextVersion = await bumpVersion(ctx, userId, sync);
+    return { conflict: false, version: nextVersion, synced };
+  },
+});
+
+/**
+ * Appends/updates one chunk of the ledger without deleting anything.
+ *
+ * The client uploads in chunks and prunes only in a final `pruneRecords` call,
+ * so a failure halfway through leaves the previous cloud backup intact. Every
+ * chunk is version-checked; the returned version is the base for the next one.
+ */
+export const upsertRecords = mutation({
+  args: { records: v.array(recordValidator), baseVersion: v.number() },
+  handler: async (ctx, { records, baseVersion }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("سائن ان کریں تاکہ کلاؤڈ سینک ممکن ہو۔");
+
+    const sync = await getSyncDoc(ctx, userId);
+    const currentVersion = sync?.version ?? 0;
+    if (baseVersion !== currentVersion) {
+      return { conflict: true, version: currentVersion, synced: 0 };
+    }
+
+    const synced = await writeRecords(ctx, userId, records.slice(-MAX_RECORDS));
+    const nextVersion = await bumpVersion(ctx, userId, sync);
+    return { conflict: false, version: nextVersion, synced };
+  },
+});
+
+/**
+ * Deletes cloud rows the client no longer has, after a full upload. Pass the
+ * complete set of local ids so a removal on one device reaches the others.
+ */
+export const pruneRecords = mutation({
+  args: { keepLocalIds: v.array(v.number()), baseVersion: v.number() },
+  handler: async (ctx, { keepLocalIds, baseVersion }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("سائن ان کریں تاکہ کلاؤڈ سینک ممکن ہو۔");
+
+    const sync = await getSyncDoc(ctx, userId);
+    const currentVersion = sync?.version ?? 0;
+    if (baseVersion !== currentVersion) {
+      return { conflict: true, version: currentVersion, pruned: 0 };
+    }
+
+    const keep = new Set(keepLocalIds.slice(-MAX_RECORDS * 2));
+    const existing = await ctx.db
+      .query("records")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    let pruned = 0;
+    for (const row of existing) {
+      if (!keep.has(row.localId)) {
+        await ctx.db.delete(row._id);
+        pruned += 1;
       }
     }
 
-    const nextVersion = currentVersion + 1;
-    if (sync) await ctx.db.patch(sync._id, { version: nextVersion, updatedAt: Date.now() });
-    else
-      await ctx.db.insert("syncState", { userId, version: nextVersion, updatedAt: Date.now() });
-
-    return { conflict: false, version: nextVersion, synced: incoming.length };
+    /* Only bump the version when something actually changed, so a no-op prune
+       never invalidates another device's base version. */
+    if (pruned === 0) return { conflict: false, version: currentVersion, pruned };
+    const nextVersion = await bumpVersion(ctx, userId, sync);
+    return { conflict: false, version: nextVersion, pruned };
   },
 });
 
@@ -243,14 +346,22 @@ export const aiStatus = query({
 });
 
 /* ------------------------------------------------------------------ */
-/* Recurring income — server side & idempotent                         */
+/* Recurring entries — server side & idempotent                        */
 /* ------------------------------------------------------------------ */
+type RecurringRule = {
+  id: string;
+  label: string;
+  amount: number;
+  enabled: boolean;
+  kind?: "income" | "expense";
+};
+
 async function materialiseRecurring(
   ctx: MutationCtx,
   doc: {
     _id: Id<"userSettings">;
     userId: Id<"users">;
-    recurring?: { id: string; label: string; amount: number; enabled: boolean }[];
+    recurring?: RecurringRule[];
     appliedKeys?: string[];
   },
 ): Promise<number> {
@@ -271,14 +382,17 @@ async function materialiseRecurring(
   for (const entry of due) {
     nextLocalId += 1;
     applied.add(`${monthKey}|${entry.id}`);
+    /* Rules default to income so settings saved before expenses were supported
+       keep materialising exactly as they used to. */
+    const kind = entry.kind ?? "income";
     await ctx.db.insert("records", {
       userId: doc.userId,
       localId: nextLocalId,
-      kind: "income",
+      kind,
       amount: entry.amount,
       detail: entry.label,
-      category: "ماہانہ آمدنی",
-      icon: "fa-money-bill-wave",
+      category: kind === "income" ? "ماہانہ آمدنی" : "ماہانہ خرچہ",
+      icon: kind === "income" ? "fa-money-bill-wave" : "fa-file-invoice-dollar",
       monthKey,
       date: "",
       time: "",
@@ -359,6 +473,7 @@ export const putAiCache = internalMutation({
       v.literal("low"),
       v.literal("medium"),
       v.literal("high"),
+      v.literal("unavailable"),
     ),
   },
   handler: async (ctx, args) => {
@@ -390,6 +505,23 @@ export const consumeAiQuota = internalMutation({
     if (doc) await ctx.db.patch(doc._id, { aiDay: today, aiCalls: used });
     else await ctx.db.insert("userSettings", { userId, aiDay: today, aiCalls: used });
     return { remaining: Math.max(0, AI_DAILY_LIMIT - used) };
+  },
+});
+
+/**
+ * Reads the quota without spending it. The action checks this before calling
+ * Gemini and only calls `consumeAiQuota` once a model answered, so a failed
+ * request no longer burns the user's daily allowance.
+ */
+export const getAiQuota = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return { remaining: -1, used: 0 };
+    const doc = await getSettingsDoc(ctx, userId);
+    const today = new Date().toISOString().slice(0, 10);
+    const used = doc?.aiDay === today ? (doc?.aiCalls ?? 0) : 0;
+    return { remaining: Math.max(0, AI_DAILY_LIMIT - used), used };
   },
 });
 

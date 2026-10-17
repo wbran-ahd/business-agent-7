@@ -18,6 +18,24 @@
 
 export type EntryType = "income" | "expense";
 
+/** Where the money actually sat: till, mobile wallet or bank. */
+export type AccountKind = "cash" | "jazzcash" | "easypaisa" | "bank";
+
+export const ACCOUNT_CATALOG: { id: AccountKind; label: string; icon: string }[] = [
+  { id: "cash", label: "کیش", icon: "fa-money-bill-wave" },
+  { id: "jazzcash", label: "جاز کیش", icon: "fa-mobile-screen" },
+  { id: "easypaisa", label: "ایزی پیسہ", icon: "fa-mobile-screen-button" },
+  { id: "bank", label: "بینک", icon: "fa-building-columns" },
+];
+
+/** Old records (and old CSV files) have no account — they were cash. */
+export function normalizeAccount(value: unknown): AccountKind {
+  return value === "jazzcash" || value === "easypaisa" || value === "bank"
+    ? value
+    : "cash";
+}
+
+
 export type Entry = {
   /** Strictly monotonic; see {@link nextId}. */
   id: number;
@@ -33,6 +51,8 @@ export type Entry = {
   time: string;
   /** Epoch ms — ordering, sorting and cloud sync all use this. */
   timestamp: number;
+  /** Cash / JazzCash / EasyPaisa / bank. Missing means cash. */
+  account?: AccountKind;
 };
 
 export type UndoEntry = { type: EntryType; record: Entry };
@@ -56,6 +76,8 @@ export type RecurringEntry = {
   label: string;
   amount: number;
   enabled: boolean;
+  /** Defaults to `income` for rules saved before expenses were supported. */
+  kind?: EntryType;
 };
 
 /** `latin` (`5,000`) is the original look; `eastern` (`۵,۰۰۰`) is opt-in. */
@@ -81,7 +103,8 @@ export type AiInsight = {
   spoken: string;
   insight: string;
   topCategory: string;
-  riskLevel: "low" | "medium" | "high";
+  /** `unavailable` means the AI itself is down/misconfigured, not “low risk”. */
+  riskLevel: "low" | "medium" | "high" | "unavailable";
 };
 
 /** Result type used by the validation helpers (no throwing on bad input). */
@@ -91,7 +114,11 @@ export type Result<T> = { ok: true; value: T } | { ok: false; message: string };
 /* Storage keys                                                        */
 /* ------------------------------------------------------------------ */
 export const STORAGE_KEY = "nabeelUltimateMasterRecord";
-export const API_KEY_STORAGE = "nabeelGeminiApiKey";
+/**
+ * Legacy plaintext Gemini key slot. Nothing writes it any more — the key is
+ * AES-GCM encrypted on the server — it is only read to delete the old value.
+ */
+export const LEGACY_API_KEY_STORAGE = "nabeelGeminiApiKey";
 export const PREF_STORAGE_KEY = "sautiBaqayaPrefs";
 
 /* ------------------------------------------------------------------ */
@@ -157,27 +184,111 @@ export function normalizeDigits(input: string): string {
   return input.replace(/[٠-٩۰-۹]/g, (ch) => EASTERN_TO_ASCII[ch] ?? ch);
 }
 
-/** Numerals below 100 — additive when stacked. */
-const URDU_SMALL: Record<string, number> = {
+/**
+ * Numerals below 100 — additive when stacked. Covers Urdu script *and* the
+ * Roman Urdu people actually type on a phone keyboard ("paanch sau"), plus the
+ * colloquial fractions ڈھائی (2.5) and ڈیڑھ (1.5).
+ */
+const NUMBER_WORDS: Record<string, number> = {
+  // --- Urdu script ---------------------------------------------------
   ایک: 1, یک: 1, دو: 2, تین: 3, چار: 4, پانچ: 5,
   چھ: 6, سات: 7, آٹھ: 8, اٹھ: 8, نو: 9, دس: 10,
   گیارہ: 11, بارہ: 12, تیرہ: 13, چودہ: 14, پندرہ: 15,
   سولہ: 16, سترہ: 17, اٹھارہ: 18, انیس: 19, بیس: 20,
-  تیس: 30, چالیس: 40, پچاس: 50, ساٹھ: 60, ستر: 70, اسی: 80, نوے: 90,
+  پچیس: 25, تیس: 30, پینتیس: 35, چالیس: 40, پینتالیس: 45, پچاس: 50,
+  ساٹھ: 60, ستر: 70, اسی: 80, نوے: 90,
+  // --- Roman Urdu -------------------------------------------------------
+  ek: 1, ik: 1, aik: 1, one: 1,
+  do: 2, two: 2,
+  teen: 3, tin: 3, trai: 3, three: 3,
+  char: 4, chaar: 4, four: 4,
+  panj: 5, paanch: 5, panch: 5, five: 5,
+  chhe: 6, che: 6, chay: 6, six: 6,
+  saat: 7, sat: 7, seven: 7,
+  aath: 8, ath: 8, eight: 8,
+  nau: 9, nine: 9,
+  das: 10, dus: 10, ten: 10,
+  gyarah: 11, eleven: 11, barah: 12, twelve: 12, pandrah: 15, fifteen: 15,
+  bees: 20, twenty: 20, pachees: 25, tees: 30, thirty: 30,
+  chalees: 40, forty: 40, pachas: 50, fifty: 50,
+  sixty: 60, sattar: 70, seventy: 70,
+  assi: 80, eighty: 80, nabbe: 90, ninety: 90,
+  // --- colloquial fractions -------------------------------------------
+  "ڈھائی": 2.5, "دھائی": 2.5, dhai: 2.5, dhaai: 2.5, dhae: 2.5, dhaii: 2.5,
+  "ڈیڑھ": 1.5, dairh: 1.5, dedh: 1.5, derh: 1.5,
 };
 
 /** Place-value multipliers — these close the current group. */
-const URDU_MULTIPLE: Record<string, number> = {
-  سو: 100,
-  ہزار: 1000,
-  ہزارہ: 1000,
-  لاکھ: 100_000,
-  کروڑ: 10_000_000,
+const MULTIPLIER_WORDS: Record<string, number> = {
+  سو: 100, so: 100, sau: 100, hundred: 100,
+  ہزار: 1000, ہزارہ: 1000, hazar: 1000, hazaar: 1000, hazarr: 1000,
+  thousand: 1000, hazr: 1000, k: 1000,
+  لاکھ: 100_000, lakh: 100_000, lac: 100_000, lak: 100_000,
+  کروڑ: 10_000_000, crore: 10_000_000, caror: 10_000_000,
 };
 
+/** Fractions that modify the *next* number: “sawa do” = 2.25, “paune teen” = 2.75. */
+const FRACTION_PREFIX: Record<string, number> = {
+  سوا: 0.25, sawa: 0.25, sava: 0.25, sawaa: 0.25,
+  ساڑھے: 0.5, "ساڑھی": 0.5, sadhe: 0.5, saadhe: 0.5, saare: 0.5, sarhe: 0.5,
+  پونے: -0.25, paune: -0.25, ponay: -0.25, pone: -0.25,
+};
+
+function tokensOf(text: string): string[] {
+  return text
+    .split(/[^\u0600-\u06FFa-zA-Z]+/)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
+}
+
 /**
- * Pulls an amount out of spoken Urdu text. Handles ASCII digits, Eastern-Arabic
- * digits, thousands separators and Urdu numeral words such as "دس ہزار پانچ سو".
+ * A multiplier directly after a digit — “1.5 hazar”, “5 hundred”, “2 lakh”,
+ * “5k”. Only the very next word counts, so “500 ka 5 hazar” stays 500.
+ */
+function multiplierAfter(text: string): number {
+  const [first] = tokensOf(text);
+  if (!first) return 1;
+  return MULTIPLIER_WORDS[first] ?? 1;
+}
+
+/** Urdu/Roman numeral words → a single amount. */
+function parseWordAmount(text: string): number | null {
+  let total = 0;
+  let current = 0;
+  let pending = 0;
+  let matched = false;
+
+  for (const token of tokensOf(text)) {
+    const fraction = FRACTION_PREFIX[token];
+    if (fraction !== undefined) {
+      pending = fraction;
+      continue;
+    }
+    const multiple = MULTIPLIER_WORDS[token];
+    if (multiple !== undefined) {
+      total += ((current || 1) + pending) * multiple;
+      current = 0;
+      pending = 0;
+      matched = true;
+      continue;
+    }
+    const small = NUMBER_WORDS[token];
+    if (small !== undefined) {
+      current += small + pending;
+      pending = 0;
+      matched = true;
+    }
+  }
+
+  const value = total + current;
+  return matched && value > 0 ? Math.round(value) : null;
+}
+
+/**
+ * Pulls an amount out of spoken text. Handles ASCII digits, Eastern-Arabic
+ * digits, thousands separators, Urdu numeral words ("دس ہزار پانچ سو"), Roman
+ * Urdu ("paanch sau", "5 hundred", "1.5 hazaar") and colloquial fractions
+ * ("dhai hazaar", "sadhe teen sau").
  */
 export function parseAmount(raw: string): number | null {
   if (!raw) return null;
@@ -188,32 +299,13 @@ export function parseAmount(raw: string): number | null {
   const numeric = normalized.match(/\d+(?:\.\d+)?/);
   if (numeric) {
     const value = Number.parseFloat(numeric[0]);
-    if (Number.isFinite(value) && value > 0) return Math.round(value);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    const rest = normalized.slice((numeric.index ?? 0) + numeric[0].length);
+    const scale = multiplierAfter(rest);
+    return Math.round(scale > 1 ? value * scale : value);
   }
 
-  const tokens = normalized.split(/[^\u0600-\u06FFa-zA-Z]+/).filter(Boolean);
-  let total = 0;
-  let current = 0;
-  let matched = false;
-
-  for (const token of tokens) {
-    const multiple = URDU_MULTIPLE[token];
-    if (multiple !== undefined) {
-      current = (current || 1) * multiple;
-      total += current;
-      current = 0;
-      matched = true;
-      continue;
-    }
-    const small = URDU_SMALL[token];
-    if (small !== undefined) {
-      current += small;
-      matched = true;
-    }
-  }
-
-  const value = total + current;
-  return matched && value > 0 ? Math.round(value) : null;
+  return parseWordAmount(normalized);
 }
 
 /** Rejects zero, negative, non-numeric and absurd amounts. */
@@ -258,11 +350,51 @@ export function hasSpokenDetail(text: string, amount: number): boolean {
 export type CategoryRule = { name: string; icon: string; patterns: RegExp[] };
 
 export const CATEGORY_RULES: CategoryRule[] = [
-  { name: "سفر", icon: "fa-gas-pump", patterns: [/پٹرول/i, /پیٹرول/i, /سفر/i, /گاڑی/i, /بائیک/i] },
-  { name: "کھانا", icon: "fa-utensils", patterns: [/چائے/i, /کھانا/i, /روٹی/i, /پانی/i, /ہوٹل/i, /چہائے/i] },
-  { name: "یوٹیلیٹی بل", icon: "fa-bolt", patterns: [/بل/i, /بجلی/i, /گیس/i, /انٹرنیٹ/i, /واٹر/i] },
-  { name: "ادھار کھاتہ", icon: "fa-hand-holding-usd", patterns: [/ادھار/i, /قرض/i, /واپسی/i] },
-  { name: "دوکان", icon: "fa-store", patterns: [/دوکان/i, /دکان/i, /سامان/i, /مال/i] },
+  {
+    name: "سفر",
+    icon: "fa-gas-pump",
+    patterns: [
+      /پٹرول/i, /پیٹرول/i, /سفر/i, /گاڑی/i, /بائیک/i,
+      // Roman Urdu — word boundaries so "garib" is not read as "gari".
+      /\bpetrol\b/i, /\bdiesel\b/i, /\bsafar\b/i, /\bgaari\b/i, /\bgari\b/i,
+      /\bbike\b/i, /\brickshaw\b/i, /\bricksha\b/i,
+    ],
+  },
+  {
+    name: "کھانا",
+    icon: "fa-utensils",
+    patterns: [
+      /چائے/i, /کھانا/i, /روٹی/i, /پانی/i, /ہوٹل/i, /چہائے/i,
+      /\bchai\b/i, /\bkhana\b/i, /\bkhanna\b/i, /\broti\b/i, /\bpani\b/i,
+      /\bhotel\b/i, /\bdhaba\b/i, /\bnashta\b/i, /\bmithai\b/i,
+    ],
+  },
+  {
+    name: "یوٹیلیٹی بل",
+    icon: "fa-bolt",
+    patterns: [
+      /بل/i, /بجلی/i, /گیس/i, /انٹرنیٹ/i, /واٹر/i,
+      /\bbill\b/i, /\bbijli\b/i, /\bgas\b/i, /\binternet\b/i, /\bwapda\b/i,
+      /\bwater\b/i, /\bload\b/i,
+    ],
+  },
+  {
+    name: "ادھار کھاتہ",
+    icon: "fa-hand-holding-usd",
+    patterns: [
+      /ادھار/i, /قرض/i, /واپسی/i,
+      /\budhar\b/i, /\budhaar\b/i, /\bqarz\b/i, /\bkarza\b/i, /\bwapasi\b/i,
+    ],
+  },
+  {
+    name: "دوکان",
+    icon: "fa-store",
+    patterns: [
+      /دوکان/i, /دکان/i, /سامان/i, /مال/i,
+      /\bdukan\b/i, /\bdokan\b/i, /\bsamaan\b/i, /\bmaal\b/i, /\bmal\b/i,
+      /\bstock\b/i, /\bkharid\b/i,
+    ],
+  },
 ];
 
 /**
@@ -551,10 +683,25 @@ export type Prefs = {
   digitStyle: DigitStyle;
   /** Recurring incomes already applied, per month key — stops duplicates. */
   appliedRecurring: Record<string, string[]>;
+  /** Urdu voice confirmations after an entry is recorded. */
+  ttsEnabled: boolean;
+  /** Speech rate: 0.85 slow, 0.95 normal, 1.1 fast. */
+  ttsRate: number;
 };
 
+/** Keeps a stored rate inside the range the settings screen offers. */
+export function clampTtsRate(value: unknown): number {
+  const rate = typeof value === "number" && Number.isFinite(value) ? value : 0.95;
+  return Math.min(1.3, Math.max(0.6, Math.round(rate * 100) / 100));
+}
+
 export function defaultPrefs(): Prefs {
-  return { digitStyle: "latin", appliedRecurring: {} };
+  return {
+    digitStyle: "latin",
+    appliedRecurring: {},
+    ttsEnabled: true,
+    ttsRate: 0.95,
+  };
 }
 
 export function loadPrefs(): Prefs {
@@ -570,6 +717,9 @@ export function loadPrefs(): Prefs {
     return {
       digitStyle: parsed.digitStyle === "eastern" ? "eastern" : "latin",
       appliedRecurring: applied,
+      // Older prefs have no TTS fields; confirmations stay on by default.
+      ttsEnabled: parsed.ttsEnabled !== false,
+      ttsRate: clampTtsRate(parsed.ttsRate),
     };
   } catch {
     return defaultPrefs();
@@ -619,7 +769,7 @@ export function escapeCsvField(value: string): string {
 }
 
 export function buildCsv(db: DataState): string {
-  const rows = ["Month,Type,Category,Date,Time,Amount,Detail"];
+  const rows = ["Month,Type,Category,Date,Time,Amount,Detail,Account"];
   const push = (kind: EntryType, list: Entry[]) =>
     list.forEach((item) => {
       rows.push(
@@ -631,6 +781,7 @@ export function buildCsv(db: DataState): string {
           escapeCsvField(item.time ?? ""),
           String(item.amount),
           escapeCsvField(item.detail ?? ""),
+          item.account ?? "cash",
         ].join(","),
       );
     });
@@ -696,6 +847,7 @@ export function entriesFromCsv(
   const iTime = idx("time");
   const iAmount = idx("amount");
   const iDetail = idx("detail");
+  const iAccount = idx("account");
 
   const income: Entry[] = [];
   const expense: Entry[] = [];
@@ -718,6 +870,7 @@ export function entriesFromCsv(
       date: (row[iDate] ?? "").trim() || "",
       time: (row[iTime] ?? "").trim() || "",
       timestamp,
+      account: normalizeAccount((row[iAccount] ?? "").trim().toLowerCase()),
     };
     const kind = (row[iType] ?? "").trim().toLowerCase();
     if (kind.startsWith("in") || kind.includes("آمدن") || kind.includes("جمع")) {

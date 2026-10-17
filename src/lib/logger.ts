@@ -13,6 +13,8 @@ export type LogScope =
   | "sync"
   | "storage"
   | "import"
+  | "pwa"
+  | "payments"
   | "app";
 
 export type LogLevel = "info" | "warn" | "error";

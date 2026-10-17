@@ -1,20 +1,6 @@
 import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
-import { Infer, v } from "convex/values";
-
-// default user roles. can add / remove based on the project as needed
-export const ROLES = {
-  ADMIN: "admin",
-  USER: "user",
-  MEMBER: "member",
-} as const;
-
-export const roleValidator = v.union(
-  v.literal(ROLES.ADMIN),
-  v.literal(ROLES.USER),
-  v.literal(ROLES.MEMBER),
-);
-export type Role = Infer<typeof roleValidator>;
+import { v } from "convex/values";
 
 const schema = defineSchema(
   {
@@ -28,8 +14,6 @@ const schema = defineSchema(
       email: v.optional(v.string()), // email of the user. do not remove
       emailVerificationTime: v.optional(v.number()), // email verification time. do not remove
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
-
-      role: v.optional(roleValidator), // role of the user. do not remove
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
     // add other tables here
@@ -51,6 +35,15 @@ const schema = defineSchema(
       date: v.string(),
       time: v.string(),
       timestamp: v.number(),
+      /** Cash / JazzCash / EasyPaisa / bank. Absent on pre-account rows. */
+      account: v.optional(
+        v.union(
+          v.literal("cash"),
+          v.literal("jazzcash"),
+          v.literal("easypaisa"),
+          v.literal("bank"),
+        ),
+      ),
     }).index("by_user", ["userId"]),
 
     /**
@@ -72,7 +65,12 @@ const schema = defineSchema(
       spoken: v.string(),
       insight: v.string(),
       topCategory: v.string(),
-      riskLevel: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
+      riskLevel: v.union(
+        v.literal("low"),
+        v.literal("medium"),
+        v.literal("high"),
+        v.literal("unavailable"),
+      ),
       createdAt: v.number(),
     }).index("by_key", ["key"]),
 
@@ -89,6 +87,8 @@ const schema = defineSchema(
             label: v.string(),
             amount: v.number(),
             enabled: v.boolean(),
+            /** Omitted on rules saved before expenses were supported. */
+            kind: v.optional(v.union(v.literal("income"), v.literal("expense"))),
           }),
         ),
       ),

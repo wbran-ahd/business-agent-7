@@ -5,9 +5,12 @@ import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
 import { requireConvexUrl } from "./lib/env";
+import { applyShareMeta } from "./lib/brand";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
+// Self-hosted fonts first, so the @font-face rules exist before the theme CSS.
+import "./styles/fonts.css";
 import "./index.css";
 
 // Lazy load route components for better code splitting
@@ -89,6 +92,12 @@ const convex = new ConvexReactClient(requireConvexUrl());
 
 function RouteSyncer() {
   const location = useLocation();
+
+  // Keep the WhatsApp/OG preview and the tab title in sync with the brand.
+  useEffect(() => {
+    applyShareMeta();
+  }, []);
+
   useEffect(() => {
     window.parent.postMessage(
       { type: "iframe-route-change", path: location.pathname },

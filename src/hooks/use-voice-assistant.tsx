@@ -21,6 +21,7 @@ import {
 } from "@/lib/khata";
 import { t } from "@/lib/i18n";
 import { logError, logEvent } from "@/lib/logger";
+import { speakUrdu } from "@/lib/tts";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 /* Speech Recognition API shim — still absent from the TS DOM lib. */
@@ -79,10 +80,25 @@ export type VoiceOptions = {
   /** Returns false when there was nothing left to undo. */
   onUndo: () => boolean;
   onAskAi: (question?: string) => void;
+  /** Voice confirmations; both come from `khata.prefs`. */
+  ttsEnabled?: boolean;
+  ttsRate?: number;
 };
 
-export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
-  const [supported, setSupported] = useState(false);
+export function useVoiceAssistant({
+  onCommit,
+  onUndo,
+  onAskAi,
+  ttsEnabled = true,
+  ttsRate = 0.95,
+}: VoiceOptions) {
+  /* Read once: the effect below only wires the recogniser, so the flag can be
+     derived instead of set from inside an effect. */
+  const [supported] = useState<boolean>(
+    () =>
+      typeof window !== "undefined" &&
+      Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
+  );
   const [listening, setListening] = useState(false);
   const [dialog, setDialogState] = useState<DialogState>("IDLE");
   const [pending, setPending] = useState<PendingEntry | null>(null);
@@ -111,17 +127,22 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
     setDialogState(next);
   }, []);
 
+  /* Rates/toggles live in refs so `speak` keeps a stable identity while always
+     reading the freshest settings (mirrors how the handlers are kept fresh). */
+  const ttsEnabledRef = useRef(ttsEnabled);
+  const ttsRateRef = useRef(ttsRate);
+  useEffect(() => {
+    ttsEnabledRef.current = ttsEnabled;
+    ttsRateRef.current = ttsRate;
+  }, [ttsEnabled, ttsRate]);
+
   const speak = useCallback((text: string) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "ur-PK";
-      utterance.rate = 0.95;
-      utterance.pitch = 1.0;
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      logError("voice", "speech synthesis failed", error);
+    const spoken = speakUrdu(text, {
+      enabled: ttsEnabledRef.current,
+      rate: ttsRateRef.current,
+    });
+    if (!spoken) {
+      logEvent("voice", "info", "speech skipped", { reason: "unavailable or disabled" });
     }
   }, []);
 
@@ -193,7 +214,7 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
           : "درج نہیں ہو سکی — رقم چیک کریں۔";
         setTranscript(
           <>
-            "{text}"
+            {text}
             <br />
             <span
               className={`text-sm font-bold ${ok ? "text-emerald-300" : "text-rose-300"}`}
@@ -215,7 +236,7 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
         const message = "نبیل بھائی، براہ کرم رقم واضح بولیں۔";
         setTranscript(
           <>
-            "{text}"
+            {text}
             <br />
             <span className="text-rose-400 text-sm">{message}</span>
           </>,
@@ -235,7 +256,7 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
         const question = `${amount} روپے ${type === "income" ? "آمدنی" : "خرچہ"} درج کروں؟`;
         setTranscript(
           <>
-            "{text}"
+            {text}
             <br />
             <span className="text-amber-300 text-sm font-bold">❓ {question}</span>
             <br />
@@ -268,7 +289,7 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
           : `آپ جو ${amount} روپے خرچ کر رہے ہیں، یہ کس کام کے لیے خرچ ہوئے؟ وضاحت کریں۔`;
       setTranscript(
         <>
-          "{text}"
+          {text}
           <br />
           <span className="text-amber-300 text-sm font-bold">❓ {question}</span>
         </>,
@@ -286,11 +307,7 @@ export function useVoiceAssistant({ onCommit, onUndo, onAskAi }: VoiceOptions) {
   /* ---- speech engines -------------------------------------------------- */
   useEffect(() => {
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Ctor) {
-      setSupported(false);
-      return;
-    }
-    setSupported(true);
+    if (!Ctor) return;
 
     const command = new Ctor();
     command.continuous = false;

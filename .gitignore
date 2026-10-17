@@ -8,3 +8,7 @@ yarn.lock
 # that the app and the CI typecheck import, and nothing typechecks without it.
 # `convex dev` / `convex deploy` regenerate it, so keep it in sync with src/convex.
 .vercel
+# Vendored Vercel CLI that only the local preview script uses.
+.vercel-vendor/
+# Local dev/preview logs and generated PWA leftovers.
+*.log

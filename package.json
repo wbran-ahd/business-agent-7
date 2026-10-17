@@ -1,13 +1,23 @@
 {
-  "name": "vite-template",
+  "name": "sauti-baqaya",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "صوتی بقیہ — اردو وائس فنانس اسسٹنٹ: بول کر کھاتہ، بجٹ الرٹ، دکان کا کھاتہ اور ماہانہ رپورٹ۔",
+  "keywords": [
+    "urdu",
+    "voice",
+    "finance",
+    "khata",
+    "bookkeeping",
+    "pakistan"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:preview": "node scripts/preview-dev.mjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
+    "test": "bun scripts/verify-khata.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "preview": "vite preview"
