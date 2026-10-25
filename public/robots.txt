@@ -1,0 +1,9 @@
+# سپائیڈروں کے لیے عام اجازت؛ admin ایکسنو کے لیے خصوصی (یہ رابطہ انڈیکس نہیں چاہیے)۔
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /admin/login
+Disallow: /dashboard
+
+# سائٹ میپ — ڈیپلائے بعد جس host پر لائیو ہو، وہیں اپ ڈیٹ کریں (docs/DEPLOY.md)۔
+Sitemap: https://gen-lang-client-09792501-d8895.web.app/sitemap.xml

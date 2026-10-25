@@ -18,21 +18,17 @@
 
 export type EntryType = "income" | "expense";
 
-/** Where the money actually sat: till, mobile wallet or bank. */
-export type AccountKind = "cash" | "jazzcash" | "easypaisa" | "bank";
+/** Where the money actually sat: cash or bank. */
+export type AccountKind = "cash" | "bank";
 
 export const ACCOUNT_CATALOG: { id: AccountKind; label: string; icon: string }[] = [
   { id: "cash", label: "کیش", icon: "fa-money-bill-wave" },
-  { id: "jazzcash", label: "جاز کیش", icon: "fa-mobile-screen" },
-  { id: "easypaisa", label: "ایزی پیسہ", icon: "fa-mobile-screen-button" },
   { id: "bank", label: "بینک", icon: "fa-building-columns" },
 ];
 
-/** Old records (and old CSV files) have no account — they were cash. */
+/** Normalize account; defaults to cash. */
 export function normalizeAccount(value: unknown): AccountKind {
-  return value === "jazzcash" || value === "easypaisa" || value === "bank"
-    ? value
-    : "cash";
+  return value === "bank" ? "bank" : "cash";
 }
 
 
@@ -51,7 +47,7 @@ export type Entry = {
   time: string;
   /** Epoch ms — ordering, sorting and cloud sync all use this. */
   timestamp: number;
-  /** Cash / JazzCash / EasyPaisa / bank. Missing means cash. */
+  /** Cash or bank. Missing means cash. */
   account?: AccountKind;
 };
 
@@ -126,7 +122,7 @@ export const PREF_STORAGE_KEY = "sautiBaqayaPrefs";
 /* ------------------------------------------------------------------ */
 /** One crore — anything above this is treated as a typo. */
 export const MAX_AMOUNT = 100_000_000;
-/** Hard cap so a huge ledger can never blow a single Convex mutation. */
+/** Hard cap so a huge ledger can never blow a single sync batch. */
 export const MAX_RECORDS = 1000;
 
 export const MONTH_NAMES: Record<string, string> = {

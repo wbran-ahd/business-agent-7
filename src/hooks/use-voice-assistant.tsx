@@ -251,33 +251,24 @@ export function useVoiceAssistant({
 
       if (hasSpokenDetail(text, amount)) {
         const detail = extractDetail(text, amount) || text;
-        setPending({ type, amount, detail });
-        setDialog("WAITING_CONFIRM");
-        const question = `${amount} روپے ${type === "income" ? "آمدنی" : "خرچہ"} درج کروں؟`;
+        const ok = onCommitRef.current(type, amount, detail);
+        setDialog("IDLE");
+        setPending(null);
+        const message = ok
+          ? `${amount} روپے ${type === "income" ? "آمدنی" : "خرچہ"} (${detail}) خودکار درج ہو گئے۔`
+          : "درج نہیں ہو سکی — رقم چیک کریں۔";
         setTranscript(
           <>
             {text}
             <br />
-            <span className="text-amber-300 text-sm font-bold">❓ {question}</span>
-            <br />
-            <span className="text-xs text-white/50 font-sans">{t("sayYesOrNo")}</span>
-            <div className="flex gap-2 justify-center mt-2 font-sans text-xs">
-              <button
-                onClick={confirmPending}
-                className="bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 px-4 py-1.5 rounded-full"
-              >
-                {t("confirmYes")}
-              </button>
-              <button
-                onClick={cancelPending}
-                className="bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 px-4 py-1.5 rounded-full"
-              >
-                {t("confirmNo")}
-              </button>
-            </div>
+            <span
+              className={`text-sm font-bold ${ok ? "text-emerald-300" : "text-rose-300"}`}
+            >
+              {ok ? "✓" : "✕"} {message}
+            </span>
           </>,
         );
-        speak(question);
+        speak(message);
         return;
       }
 

@@ -79,6 +79,15 @@ const ur = {
   /* settings modal */
   settingsTitle: "جیمینی اے آئی سیٹنگز",
   saveSettings: "سیو کریں",
+
+  /* audit #7/#24 — the key copy must match reality (plaintext storage under
+     per-owner Firestore rules, never “encrypted on the server”) */
+  geminiKeyIntro:
+    "یہ key صرف آپ کے اکاؤنٹ کی setting میں محفوظ ہوتی ہے (انکرپٹ نہیں ہوتی)، اس لیے پہلے ایپ ایکٹیویٹ کرنا ضروری ہے، اور کسی سے شیئر نہ کریں:",
+  aiKeySaved: "اے آئی کی محفوظ ہو گئی۔",
+  aiKeySaveFailed: "اے آئی کی محفوظ نہیں ہو سکی — دوبارہ کوشش کریں۔",
+  aiKeyNeedsActivation: "اے آئی کی محفوظ کرنے سے پہلے ایپ ایکٹیویٹ کریں۔",
+  aiKeySavedVoice: "اے آئی کی محفوظ ہو گئی ہے۔",
 } as const;
 
 export type MessageKey = keyof typeof ur;

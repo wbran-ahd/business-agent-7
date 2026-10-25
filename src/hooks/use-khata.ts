@@ -153,15 +153,35 @@ export function useKhata() {
         return false;
       }
       setValidationError(null);
+
+      const existingList = entryType === "income" ? data.income : data.expense;
+      const existing = existingList.find((item) => item.id === id);
+
+      const detected = detectCategory(input.detail);
+      const category = input.category || detected.name;
+      const icon = CATEGORY_CATALOG.find((c) => c.name === category)?.icon ?? detected.icon;
+      const account = normalizeAccount(input.account);
+
+      const updatedEntry: Entry = existing
+        ? {
+            ...existing,
+            amount: result.value,
+            detail: input.detail,
+            category,
+            icon,
+            account,
+          }
+        : makeRecord({ ...input, amount: result.value }, id);
+
       dispatch({
         kind: "update",
         entryType,
         id,
-        entry: makeRecord({ ...input, amount: result.value }, id),
+        entry: updatedEntry,
       });
       return true;
     },
-    [],
+    [data],
   );
 
   const removeEntry = useCallback(

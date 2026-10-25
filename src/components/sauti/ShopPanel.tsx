@@ -5,7 +5,7 @@
  *   • گاہک      — per-customer udhaar ledger, reminders, receipts
  *   • سپلائر    — the same for wholesalers (payables)
  *   • روزنامچہ  — today's cash in/out with opening & closing balance
- *   • کھاتے     — cash-in-hand vs JazzCash / EasyPaisa / bank
+ *   • کھاتے     — cash-in-hand vs bank
  *
  * Styling reuses the exact existing tokens (`glass-panel`, the same input and
  * button classes) so it is visually indistinguishable from the rest of the app.
@@ -825,7 +825,7 @@ function AccountsSection({
         <i className="fas fa-print"></i> کھاتوں کا خلاصہ پرنٹ کریں
       </button>
       <p className="mt-2 text-[10px] text-white/35">
-        نئی انٹری کا کھاتہ منتخب کریں (کیش، جاز کیش، ایزی پیسہ، بینک) — ادھار کی وصولی بھی گاہک
+        نئی انٹری کا کھاتہ منتخب کریں (کیش یا بینک) — ادھار کی وصولی بھی گاہک
         کھاتے میں اسی کھاتے کے ساتھ درج ہوتی ہے۔
       </p>
     </>

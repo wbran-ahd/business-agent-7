@@ -88,22 +88,7 @@ import {
   skipOnboarding,
   startOnboarding,
 } from "../src/lib/onboarding";
-import {
-  PLANS,
-  TRIAL_DAYS,
-  activationCode,
-  applyActivation,
-  defaultLicense,
-  licenseSnapshot,
-  normaliseTid,
-  orderReference,
-  paymentRequestMessage,
-  paymentRequestUrl,
-  planById,
-  validateActivation,
-  validateTid,
-  walletById,
-} from "../src/lib/payments";
+
 import {
   TELEMETRY_LIMIT,
   buildFieldReport,
@@ -463,7 +448,7 @@ section("daybook — opening, movements, cash/bank split");
   const data: DataState = {
     income: [
       entry(1, 1000, range.start - 86_400_000, "cash"),
-      entry(2, 500, range.start + 3_600_000, "jazzcash"),
+      entry(2, 500, range.start + 3_600_000, "bank"),
     ],
     expense: [entry(3, 300, range.start + 7_200_000, "cash")],
     undoStack: [],
@@ -489,10 +474,10 @@ section("daybook — opening, movements, cash/bank split");
   );
   check("cash inflow counts the customer payment", day.totalIn === 500 + 800, String(day.totalIn));
   check("cash outflow counts the supplier payment", day.totalOut === 300 + 400, String(day.totalOut));
-  const jazz = day.accounts.find((a) => a.account === "jazzcash");
+  const bnk = day.accounts.find((a) => a.account === "bank");
   check(
-    "jazzcash is tracked separately",
-    jazz?.inflow === 500 && jazz?.opening === 0 && jazz?.closing === 500,
+    "bank is tracked separately",
+    bnk?.inflow === 500 && bnk?.opening === 0 && bnk?.closing === 100,
   );
   check("the day lists every movement", day.rows.length === 4, String(day.rows.length));
 
@@ -551,7 +536,7 @@ section("csv — the Account column");
         date: "",
         time: "",
         timestamp: range.start,
-        account: "jazzcash",
+        account: "bank",
       },
     ],
     expense: [],
@@ -561,7 +546,7 @@ section("csv — the Account column");
   check("header ends with Account", csv.split("\n")[0].trim().endsWith("Account"));
   check(
     "account survives the round trip",
-    entriesFromCsv(csv).income[0]?.account === "jazzcash",
+    entriesFromCsv(csv).income[0]?.account === "bank",
     String(entriesFromCsv(csv).income[0]?.account),
   );
   const legacy =
@@ -789,7 +774,7 @@ section("voice preferences");
 }
 
 /* ------------------------------------------------------------------ */
-/* Phase 4 — brand, tour, payments, telemetry, reports                    */
+/* Phase 4 — brand, tour, telemetry, reports                              */
 /* ------------------------------------------------------------------ */
 
 function memoryStorage() {
@@ -855,67 +840,7 @@ section("onboarding — the 60-second tour");
   check("each step has an icon and copy", ONBOARDING_STEPS.every((s) => s.icon && s.title && s.body));
 }
 
-section("payments — plans, TID and activation");
-{
-  const now = Date.UTC(2026, 9, 17);
-  check("three plans are offered", PLANS.length === 3);
-  check("yearly is cheaper than 12 months", PLANS[1]!.price < PLANS[0]!.price * 12);
-  check("plan lookup falls back safely", planById("nope" as never).id === PLANS[0]!.id);
-  check("wallet lookup falls back safely", walletById("nope" as never).id === "jazzcash");
 
-  const ref = orderReference("yearly", "device-1", now);
-  check("order reference format", /^SB-Y2610-[0-9A-Z]{4}$/.test(ref), ref);
-  check("order reference is deterministic", orderReference("yearly", "device-1", now) === ref);
-  check("another device gets another reference", orderReference("yearly", "device-2", now) !== ref);
-
-  check("TID keeps digits only", normaliseTid(" 0300-123 4567 ") === "03001234567");
-  check("short TID is rejected", validateTid("123").ok === false);
-  check("valid TID passes", validateTid("123456").ok === true);
-  check("reused TID is rejected", validateTid("123456", ["123456"]).ok === false);
-
-  const code = activationCode("yearly", "device-1", now);
-  check("activation code format", /^SB-Y-202610-[0-9A-Z]{4}$/.test(code), code);
-  const good = validateActivation(code, "device-1", now);
-  check("code activates on the right device", good.ok === true);
-  check(
-    "code carries the plan",
-    good.ok === true && good.planId === "yearly" && good.expiresAt > now,
-  );
-  check("code fails on another device", validateActivation(code, "device-2", now).ok === false);
-  check("garbage code is rejected", validateActivation("SB-X-202610-ABCD", "device-1", now).ok === false);
-  check(
-    "expired code is rejected",
-    validateActivation(code, "device-1", now + 400 * 86_400_000).ok === false,
-  );
-
-  const trial = defaultLicense(now);
-  check("trial lasts two weeks", licenseSnapshot(trial, now).daysLeft === TRIAL_DAYS);
-  check("trial ends after two weeks", licenseSnapshot(trial, now + (TRIAL_DAYS + 1) * 86_400_000).status === "expired");
-  const activated = applyActivation(trial, code, "device-1", now);
-  check("activation returns new state", activated.result.ok && activated.state.planId === "yearly");
-  const activeSnapshot = licenseSnapshot(activated.state, now + 10 * 86_400_000);
-  check("activated licence is active", activeSnapshot.status === "active");
-  check("licence reports remaining days", activeSnapshot.daysLeft > 300, String(activeSnapshot.daysLeft));
-
-  const message = paymentRequestMessage({
-    plan: "yearly",
-    wallet: "jazzcash",
-    orderRef: ref,
-    tid: "123456",
-    payerTail: "4567",
-  });
-  check("payment message carries the order and TID", message.includes(ref) && message.includes("123456"));
-  const generic = paymentRequestUrl({
-    plan: "yearly",
-    wallet: "jazzcash",
-    orderRef: ref,
-    tid: "123456",
-    payerTail: "",
-  }, "");
-  check("without a support number the chat is generic", generic.configured === false && generic.url.startsWith("https://wa.me/?text="));
-  const direct = paymentRequestUrl({ plan: "yearly", wallet: "easypaisa", orderRef: ref, tid: "123456", payerTail: "" }, "+92 300 1234567");
-  check("with a number the chat is direct", direct.configured === true && direct.url.startsWith("https://wa.me/923001234567?text="));
-}
 
 section("telemetry — private, capped, exportable");
 {
@@ -976,7 +901,7 @@ section("reports — Excel workbook and printable PDF");
     detail: string,
     category: string,
     mKey: string,
-    account: "cash" | "bank" | "jazzcash",
+    account: "cash" | "bank",
     timestamp: number,
   ): Entry => ({
     id,
@@ -993,7 +918,7 @@ section("reports — Excel workbook and printable PDF");
   const data: DataState = {
     income: [
       row(1, 5000, "دکان کی فروخت", "عام", monthKey, "cash", at),
-      row(2, 2000, "آن لائن آرڈر", "عام", monthKey, "jazzcash", at + 1),
+      row(2, 2000, "آن لائن آرڈر", "عام", monthKey, "bank", at + 1),
       row(3, 1000, "پرانا کھاتہ", "عام", previous, "cash", at - 86_400_000),
     ],
     expense: [
@@ -1013,8 +938,7 @@ section("reports — Excel workbook and printable PDF");
   const accounts = accountTotals(data, monthKey);
   const cash = accounts.find((a) => a.id === "cash");
   check("cash account nets income minus expense", cash?.income === 5000 && cash?.expense === 1500 && cash?.net === 3500);
-  check("unused wallets are omitted", !accounts.some((a) => a.id === "easypaisa"));
-  check("bank expense is negative net", accounts.find((a) => a.id === "bank")?.net === -500);
+  check("bank nets income minus expense", accounts.find((a) => a.id === "bank")?.net === 1500);
   check("categories sum to the month expense", categoryTotals(data, monthKey).reduce((sum, c) => sum + c.amount, 0) === 2000);
 
   check("workbook has three named sheets", model.sheets.map((s) => s.name).join(",") === "خلاصہ,آمدنی,خرچہ");

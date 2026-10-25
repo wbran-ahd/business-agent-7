@@ -12,7 +12,11 @@
  *
  * Bump CACHE_VERSION on any change to this file's caching rules.
  */
-const CACHE_VERSION = "sauti-v1";
+// AUDIT #22 — bumped from sauti-v1 so the new SW (and any cache-policy change)
+// takes effect on every already-installed PWA. Policy: bump this constant on
+// every change to this file's caching rules; a forgotten bump keeps an old
+// shell alive indefinitely.
+const CACHE_VERSION = "sauti-v2";
 const SHELL = [
   "/",
   "/manifest.webmanifest",

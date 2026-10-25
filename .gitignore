@@ -1,14 +1,54 @@
-.env.local
-node_modules
-dist
-# This project installs with bun (bun.lock is tracked). yarn.lock is a stray
-# leftover and would pin a third, stale dependency set if it were committed.
-yarn.lock
-# src/convex/_generated is committed on purpose: it holds the Convex API types
-# that the app and the CI typecheck import, and nothing typechecks without it.
-# `convex dev` / `convex deploy` regenerate it, so keep it in sync with src/convex.
-.vercel
-# Vendored Vercel CLI that only the local preview script uses.
-.vercel-vendor/
-# Local dev/preview logs and generated PWA leftovers.
+bun.lock
+
+# Build output — generated, never committed; deploy from dist/ or rebuild.
+dist/
+
+# Platform preview/build workspace artifacts.
+freebuff-sites-build/
+
+# Local dev/premium logs and generated PWA leftovers.
 *.log
+.logs/
+
+# AI Studio scratch pastes (build-time inputs, not app assets).
+public/assets/aistudio/
+.aistudio/
+
+# Freebuff workspace scratch/markers (not user project files).
+.freebuff/
+.freebuff-project-id
+
+# Artifacts folder (generated images / exports) — regenerate locally.
+artifacts/
+
+# Firebase CLI local state and admin credentials.
+# A service-account JSON can bypass every Firestore rule, so it must never reach
+# a commit or an archive.
+.firebase/
+*-firebase-adminsdk-*.json
+
+# Vercel leftovers.
+.vercel
+.vercel-vendor/
+
+# Node dependency trees — use bun.lock for the frontend and
+# functions/package-lock.json only if you intentionally commit it.
+node_modules/
+functions/node_modules/
+
+# Compiled Cloud Functions output. Source stays in functions/src/; the compiled
+# lib/ and its map files are build artifacts, not source.
+functions/lib/
+
+# Secrets and local env files — set these through your platform/secret manager,
+# never in the repo.
+.env
+.env.*
+!.env.example
+functions/.env
+functions/.env.*
+!.env.example
+functions/.secret.local
+
+# Stale package-manager lock from a different package manager.
+yarn.lock

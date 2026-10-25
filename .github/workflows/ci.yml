@@ -1,8 +1,8 @@
 name: CI
 
-# Pull requests gate the typecheck, the ledger logic checks and the Convex
-# push. Pushes to main re-run the same checks so a broken merge is caught on the
-# branch itself; this workflow never deploys anything.
+# Pull requests gate the typecheck and the ledger logic checks. Pushes to main
+# re-run the same checks so a broken merge is caught on the branch itself; this
+# workflow never deploys anything.
 on:
   pull_request:
   push:
@@ -29,57 +29,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # `bun run typecheck` is `tsc -b --noEmit` (tsconfig.app.json covers src,
-      # tsconfig.node.json covers vite.config.ts). src/convex/_generated is
-      # committed because the Convex API types live there and nothing typechecks
-      # without them.
+      # tsconfig.node.json covers vite.config.ts).
       - name: Typecheck
         run: bun run typecheck
       # `bun run test` is `bun scripts/verify-khata.ts` — pure ledger logic
       # checks (amounts, budgets, CSV, formatting) that need no deployment.
       - name: Ledger logic tests
         run: bun run test
-
-  convex-push:
-    name: Convex push
-    # A preview deploy key belongs to a PR preview deployment, so this job only
-    # runs for pull requests — never on a push to main.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      # A Convex *preview* deploy key (Convex dashboard -> project -> Settings ->
-      # Deploy Keys -> Preview) so a PR pushes to its own branch-named preview
-      # deployment. A production deploy key would push every PR straight to
-      # production instead. Stored as the repository secret CONVEX_DEPLOY_KEY
-      # (GitHub -> Settings -> Secrets and variables -> Actions).
-      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      # This repo has no cloud Convex deployment yet, so the push can only run
-      # once a deploy key exists. Without one the job says so loudly instead of
-      # reporting a pass, because nothing was pushed.
-      - name: Check for a deploy key
-        id: deploy-key
-        run: |
-          if [ -n "$CONVEX_DEPLOY_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "### Convex push skipped"
-              echo ""
-              echo "No \`CONVEX_DEPLOY_KEY\` repository secret is configured, so nothing was pushed."
-              echo ""
-              echo "Add a Convex **preview** deploy key as \`CONVEX_DEPLOY_KEY\` (Settings -> Secrets and variables -> Actions) to run the push on pull requests."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning title=Convex push skipped::CONVEX_DEPLOY_KEY is not set, so no functions or schema were pushed."
-          fi
-      # `convex deploy` bundles the functions, regenerates src/convex/_generated,
-      # and pushes functions, indexes, schema and auth config.
-      - name: Push functions, indexes and schema
-        if: steps.deploy-key.outputs.present == 'true'
-        run: bunx convex deploy

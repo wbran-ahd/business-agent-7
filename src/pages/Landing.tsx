@@ -5,7 +5,7 @@
  * same emerald/sky/amber accents, Nastaliq for Urdu display type and a sans
  * body so Latin copy stays readable.
  *
- * Flow: every primary CTA sends the visitor to `/auth?returnTo=/dashboard`,
+ * Flow: every primary CTA sends the visitor to `/dashboard`; the route gate
  * and a signed-in visitor's CTA becomes "open dashboard" instead.
  */
 import logo from "@/assets/logo.svg";
@@ -26,7 +26,7 @@ import { motion, type MotionProps } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
-const SIGN_IN = "/auth?returnTo=/dashboard";
+const ENTER_APP = "/dashboard";
 
 const primaryCta =
   "inline-flex cursor-pointer items-center gap-2 rounded-full border border-sky-400/60 bg-sky-500 px-6 py-3 text-sm font-bold text-white transition hover:bg-sky-400";
@@ -132,7 +132,7 @@ const SECURITY = [
   "Gemini API کی سرور پر AES-GCM انکرپشن کے ساتھ محفوظ ہوتی ہے",
   "روزانہ AI کوٹا، تاکہ کلید کا استعمال کنٹرول میں رہے",
   "مکمل CSV/JSON ایکسپورٹ — آپ کا ڈیٹا ہمیشہ آپ کا",
-  "گیسٹ موڈ فوری، سائن اپ کے بغیر مقامی ڈیٹا کے ساتھ",
+  "داخلہ صرف ایکٹیویشن کوڈ سے — کوئی فارم نہیں، کھاتہ فوراً تیار",
 ];
 
 function SectionHeading({
@@ -205,12 +205,12 @@ export default function Landing() {
             ) : (
               <>
                 <Link
-                  to={SIGN_IN}
+                  to={ENTER_APP}
                   className={`${ghostCta} hidden px-4 py-2 sm:inline-flex sm:px-5 sm:py-2.5`}
                 >
-                  سائن ان
+                  ایکٹیویٹ کریں
                 </Link>
-                <Link to={SIGN_IN} className={`${primaryCta} px-4 py-2 sm:px-5 sm:py-2.5`}>
+                <Link to={ENTER_APP} className={`${primaryCta} px-4 py-2 sm:px-5 sm:py-2.5`}>
                   مفت شروع کریں
                 </Link>
               </>
@@ -241,15 +241,15 @@ export default function Landing() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Link to={SIGN_IN} className={primaryCta}>
+            <Link to={ENTER_APP} className={primaryCta}>
               مفت شروع کریں
               <ArrowLeft className="size-4" />
             </Link>
             <Link
-              to={isAuthenticated ? "/dashboard" : SIGN_IN}
+              to={ENTER_APP}
               className={ghostCta}
             >
-              {isAuthenticated ? "میرا کھاتہ دیکھیں" : "پہلے سے اکاؤنٹ؟ سائن ان"}
+              {isAuthenticated ? "میرا کھاتہ دیکھیں" : "ایکٹیویشن کوڈ درج کریں"}
             </Link>
           </div>
 
@@ -440,11 +440,11 @@ export default function Landing() {
               آپ کا ڈیٹا، آپ کے کنٹرول میں
             </h2>
             <p className="mt-4 text-sm leading-7 text-white/55">
-              کھاتہ مقامی طور پر محفوظ رہتا ہے اور سائن ان کے بعد کلاؤڈ پر ہم آہنگ ہو جاتا ہے —
+              کھاتہ مقامی طور پر محفوظ رہتا ہے اور ایکٹیویشن کے بعد کلاؤڈ پر ہم آہنگ ہو جاتا ہے —
               ہر اپ لوڈ ورژن چیک کے ساتھ، تاکہ نیا ڈیٹا کبھی خاموشی میں نہ ہٹے۔
             </p>
-            <Link to={SIGN_IN} className={`${primaryCta} mt-7`}>
-              ابھی سائن اپ کریں
+            <Link to={ENTER_APP} className={`${primaryCta} mt-7`}>
+              ابھی شروع کریں
               <ArrowLeft className="size-4" />
             </Link>
           </motion.div>
@@ -474,10 +474,10 @@ export default function Landing() {
             آج ہی اپنا صوتی بقیہ شروع کریں
           </h2>
           <p className="mt-4 text-sm leading-7 text-white/55">
-            ایک کلک میں گیسٹ موڈ، یا ای میل سے سائن ان — کھاتہ فوراً تیار ہے۔
+            ایکٹیویشن کوڈ ڈالیں — کھاتہ فوراً تیار ہے، کوئی اکاؤنٹ بنانے کی ضرورت نہیں۔
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Link to={SIGN_IN} className={primaryCta}>
+            <Link to={ENTER_APP} className={primaryCta}>
               {isAuthenticated ? "ڈیش بورڈ کھولیں" : "مفت شروع کریں"}
               <ArrowLeft className="size-4" />
             </Link>
@@ -506,8 +506,8 @@ export default function Landing() {
             <a href="#voice" className="transition hover:text-white">
               وائس نمونے
             </a>
-            <Link to={SIGN_IN} className="transition hover:text-white">
-              سائن ان
+            <Link to={ENTER_APP} className="transition hover:text-white">
+              ایکٹیویٹ کریں
             </Link>
           </nav>
 

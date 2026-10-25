@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- آڈٹ #25 — مین روٹس۔ کمپیٹر پر جس host پر لائیو ہو (Freebuff/Firebase web.app)،
+     robots.txt اور یہ فائل دونوں اسے اپ ڈیٹ کر دیں (docs/DEPLOY.md قدم 4)۔ -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://gen-lang-client-09792501-d8895.web.app/</loc>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://gen-lang-client-09792501-d8895.web.app/activate</loc>
+    <priority>0.8</priority>
+  </url>
+</urlset>

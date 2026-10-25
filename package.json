@@ -2,7 +2,7 @@
   "name": "sauti-baqaya",
   "private": true,
   "version": "1.0.0",
-  "description": "صوتی بقیہ — اردو وائس فنانس اسسٹنٹ: بول کر کھاتہ، بجٹ الرٹ، دکان کا کھاتہ اور ماہانہ رپورٹ۔",
+  "description": "\u0635\u0648\u062a\u06cc \u0628\u0642\u06cc\u06c1 \u2014 \u0627\u0631\u062f\u0648 \u0648\u0627\u0626\u0633 \u0641\u0646\u0627\u0646\u0633 \u0627\u0633\u0633\u0679\u0646\u0679: \u0628\u0648\u0644 \u06a9\u0631 \u06a9\u06be\u0627\u062a\u06c1\u060c \u0628\u062c\u0679 \u0627\u0644\u0631\u0679\u060c \u062f\u06a9\u0627\u0646 \u06a9\u0627 \u06a9\u06be\u0627\u062a\u06c1 \u0627\u0648\u0631 \u0645\u0627\u06c1\u0627\u0646\u06c1 \u0631\u067e\u0648\u0631\u0679\u06d4",
   "keywords": [
     "urdu",
     "voice",
@@ -13,14 +13,14 @@
   ],
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:preview": "node scripts/preview-dev.mjs",
+    "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
-    "test": "bun scripts/verify-khata.ts",
+    "test": "bun scripts/verify-khata.ts && bun scripts/verify-scaffolding.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "preview": "vite preview"
+    "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "dev:preview": "node scripts/preview-dev.mjs"
   },
   "dependencies": {
     "@convex-dev/auth": "^0.0.90",
@@ -53,6 +53,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@sentry/react": "^11.9.0",
     "@tailwindcss/vite": "^4.1.17",
     "@vly-ai/integrations": "^0.6.14",
     "@zumer/snapdom": "^2.0.1",
@@ -64,6 +65,7 @@
     "convex": "^1.46.0",
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
+    "firebase": "^13.0.0",
     "framer-motion": "^12.23.25",
     "hono": "^4.10.7",
     "input-otp": "^1.4.2",
@@ -71,6 +73,8 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.555.0",
     "next-themes": "^0.4.6",
+    "posthog-js": "^1.438.21",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-day-picker": "9.13.0",
     "react-dom": "^19.2.0",
@@ -87,7 +91,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@types/node": "^24.10.1",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.1.1",

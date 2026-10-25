@@ -187,7 +187,7 @@ export function buildDaybook(data: DataState, book: PartyBook, dateKey: string):
 }
 
 function zeroAccounts(): Record<AccountKind, number> {
-  return { cash: 0, jazzcash: 0, easypaisa: 0, bank: 0 };
+  return { cash: 0, bank: 0 };
 }
 
 export type AccountBalance = {

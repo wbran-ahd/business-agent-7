@@ -60,7 +60,6 @@ export { Menubar, MenubarMenu, MenubarTrigger, MenubarContent, MenubarItem, Menu
 // Form Components
 export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectLabel, SelectItem, SelectSeparator, SelectScrollUpButton, SelectScrollDownButton } from "./select"; // ~6KB - Dropdown select
 export { Form, FormItem, FormLabel, FormControl, FormDescription, FormMessage, FormField } from "./form"; // ~4KB - Form wrapper with validation
-export { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator } from "./input-otp"; // ~5KB - OTP input
 
 // Content Display
 export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "./accordion"; // ~5KB - Collapsible sections
@@ -87,7 +86,9 @@ export { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "./resizabl
 export { Sidebar, SidebarProvider, SidebarTrigger, SidebarInset, SidebarHeader, SidebarFooter, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarGroupAction, SidebarGroupContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction, SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton, SidebarMenuBadge, SidebarSeparator, SidebarRail } from "./sidebar"; // ~10KB
 
 // Data Visualization
-export { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent, ChartStyle } from "./chart"; // ~20KB+ (requires recharts - very large!)
+// Audit #9: the shadcn/recharts chart wrapper was dead code (nothing imported
+// it — the app's charts run on Chart.js in `sauti/Charts.tsx`). Deleted along
+// with the `recharts` dependency.
 
 // Notifications
 export { Toaster } from "./sonner"; // ~8KB - Toast notifications
@@ -112,8 +113,7 @@ export { Toaster } from "./sonner"; // ~8KB - Toast notifications
  * import { Card, Tabs, Chart } from "@/components/ui";
  * import { Select, Button } from "@/components/ui";
  *
- * Large bundle impact: ~35KB+ (due to Chart/recharts)
- * Consider lazy loading: const Chart = lazy(() => import("@/components/ui/chart"));
+ * Large bundle impact: ~35KB+ (charts live in `sauti/Charts.tsx`, Chart.js)
  */
 
 /**

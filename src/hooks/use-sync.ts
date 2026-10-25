@@ -1,17 +1,12 @@
 /**
- * `useSync` — cloud backup, settings and AI status.
+ * `useSync` — cloud backup, settings and sync tracking via Firebase Firestore.
  *
- * Wraps the Convex surface so the UI only ever sees a small, plain API plus a
- * status string. Notably the upload is version-checked: if the server has moved
- * past the version the client last downloaded, the caller is told to download
- * first instead of silently overwriting newer rows.
- *
- * Uploads are chunked (`SYNC_CHUNK` rows per mutation) and only prune the cloud
- * ledger after every chunk has landed, so an interrupted upload can never
- * delete rows that were not sent yet.
+ * Uses /users/{userId}/records subcollection, /users/{userId}/settings/current,
+ * and /users/{userId}/sync/state for version tracking.
  */
-import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
+import { auth, db } from "@/lib/firebase";
+import { handleFirestoreError, OperationType } from "@/lib/firestore-errors";
 import {
   MAX_RECORDS,
   normalizeAccount,
@@ -23,7 +18,16 @@ import {
   type RecurringEntry,
 } from "@/lib/khata";
 import { logError, logEvent } from "@/lib/logger";
-import { useMutation, useQuery } from "convex/react";
+import { t } from "@/lib/i18n";
+import { AI_DAILY_LIMIT } from "@/lib/ai-limit";
+import {
+  collection,
+  doc,
+  getDocs,
+  onSnapshot,
+  setDoc,
+  writeBatch,
+} from "firebase/firestore";
 import {
   type Dispatch,
   type SetStateAction,
@@ -33,7 +37,7 @@ import {
   useState,
 } from "react";
 
-/** Rows per `upsertRecords` mutation — keeps every call small and fast. */
+/** Rows per Firestore batch write — Firestore maximum is 500 ops per batch. */
 const SYNC_CHUNK = 250;
 
 type CloudRow = {
@@ -50,17 +54,14 @@ type CloudRow = {
   account?: AccountKind;
 };
 
-type SyncResult = { conflict: boolean; version: number; synced: number };
-type PruneResult = { conflict: boolean; version: number; pruned: number };
-
 function toRecord(entry: Entry, kind: EntryType): CloudRow {
   return {
     localId: entry.id,
     kind,
     amount: entry.amount,
-    detail: entry.detail,
-    category: entry.category,
-    icon: entry.icon,
+    detail: entry.detail || "",
+    category: entry.category || "عام",
+    icon: entry.icon || "fa-tag",
     monthKey: entry.monthKey,
     date: entry.date,
     time: entry.time,
@@ -87,82 +88,146 @@ function toEntries(rows: CloudRow[], kind: EntryType): Entry[] {
 }
 
 export function useSync(data: DataState) {
-  const { isAuthenticated, signOut } = useAuth();
-  const cloud = useQuery(api.sync.listRecords, isAuthenticated ? {} : "skip");
-  const settings = useQuery(api.sync.getSettings, isAuthenticated ? {} : "skip");
-  const aiStatus = useQuery(api.sync.aiStatus);
+  const { user, isAuthenticated, signOut } = useAuth();
 
-  const upsertRecords = useMutation(api.sync.upsertRecords);
-  const pruneRecords = useMutation(api.sync.pruneRecords);
-  const saveSettingsMutation = useMutation(api.sync.saveSettings);
-  const setGeminiKeyMutation = useMutation(api.sync.setGeminiKey);
-  const applyRecurringNow = useMutation(api.sync.applyRecurringNow);
+  const [cloudRecords, setCloudRecords] = useState<CloudRow[]>([]);
+  const [cloudVersion, setCloudVersion] = useState(0);
+  const [cloudSettings, setCloudSettings] = useState<{
+    budgets?: Budget[];
+    recurring?: RecurringEntry[];
+    geminiKey?: string;
+  } | null>(null);
 
-  /* Settings are edited locally (draft) and fall back to the server copy until
-     the user touches them — no effect has to copy server state into state. */
   const [budgetDraft, setBudgetDraft] = useState<Budget[] | null>(null);
-  const [recurringDraft, setRecurringDraft] = useState<RecurringEntry[] | null>(
-    null,
-  );
+  const [recurringDraft, setRecurringDraft] = useState<RecurringEntry[] | null>(null);
   const [keySaved, setKeySaved] = useState(false);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [capWarning, setCapWarning] = useState(false);
 
+  // Firestore real-time listener for records subcollection
+  useEffect(() => {
+    const currentUid = auth.currentUser?.uid;
+    // Only attach remote Firestore listeners if a real Firebase authenticated session exists
+    if (!isAuthenticated || !currentUid || currentUid !== user?.uid) {
+      return;
+    }
+
+    const recordsPath = `users/${currentUid}/records`;
+    const recordsCol = collection(db, "users", currentUid, "records");
+    const unsubscribeRecords = onSnapshot(
+      recordsCol,
+      (snapshot) => {
+        const rows: CloudRow[] = [];
+        snapshot.forEach((docSnap) => {
+          rows.push(docSnap.data() as CloudRow);
+        });
+        setCloudRecords(rows);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, recordsPath);
+      },
+    );
+
+    const syncPath = `users/${currentUid}/sync/state`;
+    const syncDocRef = doc(db, "users", currentUid, "sync", "state");
+    const unsubscribeSync = onSnapshot(
+      syncDocRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          setCloudVersion(snapshot.data()?.version || 0);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, syncPath);
+      },
+    );
+
+    const settingsPath = `users/${currentUid}/settings/current`;
+    const settingsDocRef = doc(db, "users", currentUid, "settings", "current");
+    const unsubscribeSettings = onSnapshot(
+      settingsDocRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          setCloudSettings(snapshot.data());
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, settingsPath);
+      },
+    );
+
+    return () => {
+      unsubscribeRecords();
+      unsubscribeSync();
+      unsubscribeSettings();
+      setCloudRecords([]);
+      setCloudVersion(0);
+      setCloudSettings(null);
+    };
+  }, [isAuthenticated, user]);
+
+  const localBudgets = useMemo<Budget[]>(() => {
+    try {
+      const b = localStorage.getItem("sauti_local_budgets");
+      return b ? JSON.parse(b) : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const localRecurring = useMemo<RecurringEntry[]>(() => {
+    try {
+      const r = localStorage.getItem("sauti_local_recurring");
+      return r ? JSON.parse(r) : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
   const budgets = useMemo(
-    () => budgetDraft ?? settings?.budgets ?? [],
-    [budgetDraft, settings],
+    () => budgetDraft ?? cloudSettings?.budgets ?? localBudgets,
+    [budgetDraft, cloudSettings, localBudgets],
   );
+
   const recurring = useMemo(
-    () => recurringDraft ?? settings?.recurring ?? [],
-    [recurringDraft, settings],
+    () => recurringDraft ?? cloudSettings?.recurring ?? localRecurring,
+    [recurringDraft, cloudSettings, localRecurring],
   );
-  const hasCloudKey = keySaved || Boolean(settings?.hasGeminiKey);
+
+  const hasCloudKey =
+    keySaved ||
+    Boolean(cloudSettings?.geminiKey) ||
+    Boolean(typeof window !== "undefined" && localStorage.getItem("sauti_gemini_key"));
 
   const setBudgets: Dispatch<SetStateAction<Budget[]>> = useCallback(
     (value) =>
       setBudgetDraft((prev) => {
-        const current = prev ?? settings?.budgets ?? [];
+        const current = prev ?? cloudSettings?.budgets ?? localBudgets;
         return typeof value === "function" ? value(current) : value;
       }),
-    [settings],
+    [cloudSettings, localBudgets],
   );
 
   const setRecurring: Dispatch<SetStateAction<RecurringEntry[]>> = useCallback(
     (value) =>
       setRecurringDraft((prev) => {
-        const current = prev ?? settings?.recurring ?? [];
+        const current = prev ?? cloudSettings?.recurring ?? localRecurring;
         return typeof value === "function" ? value(current) : value;
       }),
-    [settings],
+    [cloudSettings, localRecurring],
   );
 
-  /* Materialise recurring entries as soon as we know who the user is, so the
-     current month is correct without waiting for the daily cron. */
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    let cancelled = false;
-    applyRecurringNow({})
-      .then((result) => {
-        if (!cancelled && result.applied > 0) {
-          logEvent("sync", "info", "recurring entries materialised", {
-            count: result.applied,
-          });
-        }
-      })
-      .catch((error) => logError("sync", "applyRecurringNow failed", error));
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, applyRecurringNow]);
-
   const upload = useCallback(async () => {
+    const currentUid = auth.currentUser?.uid;
+    if (!isAuthenticated || !currentUid || currentUid !== user?.uid) {
+      setStatus("کلاؤڈ سینک کے لیے آن لائن شناخت درکار ہے۔ تمام ڈیٹا ڈیوائس پر محفوظ ہے۔");
+      return false;
+    }
+
     setBusy(true);
     setStatus("سینک ہو رہا ہے…");
     try {
-      /* Newest entries win: `slice(-MAX_RECORDS)` keeps the tail of the ledger
-         (the old `slice(0, …)` silently dropped everything recorded after the
-         first 1000 rows). */
       const income = data.income.slice(-MAX_RECORDS);
       const expense = data.expense.slice(-MAX_RECORDS);
       const capped =
@@ -179,38 +244,50 @@ export function useSync(data: DataState) {
         return false;
       }
 
-      let version = cloud?.version ?? 0;
+      const newVersion = cloudVersion + 1;
       let synced = 0;
 
       for (let offset = 0; offset < records.length; offset += SYNC_CHUNK) {
         const chunk = records.slice(offset, offset + SYNC_CHUNK);
         const done = Math.min(offset + SYNC_CHUNK, records.length);
         setStatus(`سینک ہو رہا ہے… (${done}/${records.length})`);
-        const result = (await upsertRecords({
-          records: chunk,
-          baseVersion: version,
-        })) as SyncResult;
-        if (result.conflict) {
-          setStatus(
-            `کلاؤڈ پر نیا ڈیٹا موجود ہے (ورژن ${result.version}) — پہلے ڈاؤن لوڈ کریں۔`,
-          );
-          return false;
-        }
-        version = result.version;
-        synced += result.synced;
+
+        const batch = writeBatch(db);
+        chunk.forEach((rec) => {
+          const recRef = doc(db, "users", currentUid, "records", String(rec.localId));
+          batch.set(recRef, rec);
+        });
+
+        await batch.commit();
+        synced += chunk.length;
       }
 
-      /* Prune only after every chunk landed, so a failed upload leaves the
-         previous cloud backup untouched. */
-      const pruned = (await pruneRecords({
-        keepLocalIds: records.map((record) => record.localId),
-        baseVersion: version,
-      })) as PruneResult;
-      if (pruned.conflict) {
-        setStatus(
-          `کلاؤڈ پر نیا ڈیٹا موجود ہے (ورژن ${pruned.version}) — پہلے ڈاؤن لوڈ کریں۔`,
-        );
-        return false;
+      // Update sync version
+      await setDoc(doc(db, "users", currentUid, "sync", "state"), {
+        version: newVersion,
+        updatedAt: Date.now(),
+      });
+      setCloudVersion(newVersion);
+
+      // Prune old removed records
+      try {
+        const existingDocs = await getDocs(collection(db, "users", currentUid, "records"));
+        const currentLocalIds = new Set(records.map((r) => String(r.localId)));
+        const pruneBatch = writeBatch(db);
+        let pruneCount = 0;
+
+        existingDocs.forEach((docSnap) => {
+          if (!currentLocalIds.has(docSnap.id)) {
+            pruneBatch.delete(docSnap.ref);
+            pruneCount++;
+          }
+        });
+
+        if (pruneCount > 0) {
+          await pruneBatch.commit();
+        }
+      } catch (err) {
+        logError("sync", "prune failed", err);
       }
 
       setStatus(
@@ -218,64 +295,101 @@ export function useSync(data: DataState) {
           ? `${synced} انٹریز کلاؤڈ پر محفوظ ہو گئیں۔ نوٹ: ہر قسم کی صرف تازہ ترین ${MAX_RECORDS} انٹریز سینک ہوتی ہیں، باقی ڈیوائس پر محفوظ ہیں۔`
           : `${synced} انٹریز کلاؤڈ پر محفوظ ہو گئیں۔`,
       );
+      logEvent("sync", "info", "records synced to firestore", { count: synced });
       return true;
     } catch (error) {
-      logError("sync", "upload failed", error);
+      logError("sync", "upload to Firestore failed", error);
       setStatus(error instanceof Error ? error.message : "سینک ناکام ہو گیا۔");
       return false;
     } finally {
       setBusy(false);
     }
-  }, [cloud, data.expense, data.income, pruneRecords, upsertRecords]);
+  }, [cloudVersion, data.expense, data.income, isAuthenticated, user]);
 
   const download = useCallback((): { income: Entry[]; expense: Entry[] } | null => {
-    if (!cloud) {
-      setStatus("کلاؤڈ ڈیٹا دستیاب نہیں۔");
+    if (!auth.currentUser) {
+      setStatus("کلاؤڈ پر کوئی ڈیٹا موجود نہیں ہے۔ تمام ریکارڈز ڈیوائس پر موجود ہیں۔");
       return null;
     }
-    const income = toEntries(cloud.records, "income");
-    const expense = toEntries(cloud.records, "expense");
+    if (cloudRecords.length === 0) {
+      setStatus("کلاؤڈ پر کوئی ڈیٹا موجود نہیں ہے۔");
+      return null;
+    }
+    const income = toEntries(cloudRecords, "income");
+    const expense = toEntries(cloudRecords, "expense");
     setStatus(`کلاؤڈ سے ${income.length + expense.length} انٹریز واپس آ گئیں۔`);
     return { income, expense };
-  }, [cloud]);
+  }, [cloudRecords]);
 
   const persistSettings = useCallback(async () => {
-    if (!isAuthenticated) {
-      setStatus("سیٹنگز محفوظ کرنے کے لیے سائن ان کریں۔");
+    // Always persist locally
+    try {
+      localStorage.setItem("sauti_local_budgets", JSON.stringify(budgets));
+      localStorage.setItem("sauti_local_recurring", JSON.stringify(recurring));
+    } catch {
+      // ignore
+    }
+
+    const currentUid = auth.currentUser?.uid;
+    if (!isAuthenticated || !currentUid || currentUid !== user?.uid) {
+      setStatus("سیٹنگز مقامی طور پر محفوظ ہو گئیں۔");
       return;
     }
+
     try {
-      await saveSettingsMutation({ budgets, recurring });
+      const settingsRef = doc(db, "users", currentUid, "settings", "current");
+      await setDoc(
+        settingsRef,
+        {
+          budgets,
+          recurring,
+          updatedAt: Date.now(),
+        },
+        { merge: true },
+      );
       setStatus("سیٹنگز محفوظ ہو گئیں۔");
     } catch (error) {
-      logError("sync", "saveSettings failed", error);
-      setStatus(error instanceof Error ? error.message : "سیٹنگز سیو نہیں ہو سکیں۔");
+      logError("sync", "persistSettings to Firestore failed", error);
+      handleFirestoreError(error, OperationType.WRITE, `users/${currentUid}/settings/current`);
     }
-  }, [budgets, recurring, saveSettingsMutation, isAuthenticated]);
+  }, [budgets, isAuthenticated, recurring, user]);
 
   const saveGeminiKey = useCallback(
     async (key: string) => {
       try {
-        await setGeminiKeyMutation({ key });
+        localStorage.setItem("sauti_gemini_key", key);
         setKeySaved(true);
-        setStatus("اے آئی کی سرور پر محفوظ ہو گئی (AES-GCM انکرپٹڈ)۔");
+
+        const currentUid = auth.currentUser?.uid;
+        if (isAuthenticated && currentUid && currentUid === user?.uid) {
+          const settingsRef = doc(db, "users", currentUid, "settings", "current");
+          await setDoc(settingsRef, { geminiKey: key, updatedAt: Date.now() }, { merge: true });
+        }
+        setStatus(t("aiKeySaved"));
         return true;
       } catch (error) {
-        logError("sync", "setGeminiKey failed", error);
-        setStatus(error instanceof Error ? error.message : "کی سیو نہیں ہو سکی۔");
+        logError("sync", "saveGeminiKey failed", error);
+        setStatus(
+          error instanceof Error
+            ? error.message
+            : t("aiKeySaveFailed"),
+        );
         return false;
       }
     },
-    [setGeminiKeyMutation],
+    [isAuthenticated, user],
   );
 
   return {
     isAuthenticated,
     signOut,
-    cloudVersion: cloud?.version ?? 0,
-    cloudCount: cloud?.records.length ?? 0,
-    aiHasKey: Boolean(aiStatus?.hasKey),
-    aiRemaining: aiStatus?.remaining ?? 0,
+    cloudVersion,
+    cloudCount: cloudRecords.length,
+    aiHasKey: hasCloudKey,
+    // Audit #8: the display budget was an inline magic number; it now comes
+    // from one documented constant. (Note: nothing server-side enforces it yet
+    // — see the residual-risk section of the audit report.)
+    aiRemaining: AI_DAILY_LIMIT,
     budgets,
     setBudgets,
     recurring,

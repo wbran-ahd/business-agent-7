@@ -1,46 +1,28 @@
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2, Lock } from "lucide-react";
+import { useLicense } from "@/hooks/use-license";
+import { Loader2 } from "lucide-react";
+import { Navigate } from "react-router";
 import type { ReactNode } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router";
 
 /**
- * Wraps a route that requires a signed-in user.
+ * Route gate for the signed-in product.
  *
- * Signed-out visitors used to be bounced straight to `/auth`, which left them
- * on a bare sign-in form with no idea which page they had asked for or why they
- * were moved. The block is now stated on the page they landed on, and sign-in
- * still returns them to it via `returnTo`. Pass `redirectImmediately` for a
- * route where the bounce really is the better experience. All visible copy is
- * Urdu, matching the rest of the app.
+ * Access to صوتی بقیہ is QR/activation-code only, so this gate never sends
+ * anyone to a sign-in form. It waits for Firebase's anonymous identity (which
+ * `use-license` starts) and for that uid's licence answer:
+ *
+ * - identity not ready / licence still loading → spinner
+ * - no identity → `/activate` (never a blank screen: the activation screen is
+ *   the entry point, so it stays reachable without a session)
+ * - definitively unlicensed (`missing`, `expired`, `revoked`) → `/activate`
+ * - network failure or rate limit → let the app through: local-first, and
+ *   Firestore rules still enforce the licence server-side.
  */
-export function RequireAuth({
-  children,
-  title = "جاری رکھنے کے لیے سائن ان کریں",
-  description = "یہ صفحہ صرف سائن ان شدہ صارفین کے لیے دستیاب ہے۔",
-  redirectImmediately = false,
-}: {
-  children: ReactNode;
-  /** Headline on the blocked screen. */
-  title?: string;
-  /** Says what the visitor gets by signing in. */
-  description?: string;
-  /** Skip the explanation and go straight to `/auth`. */
-  redirectImmediately?: boolean;
-}) {
+export function RequireAuth({ children }: { children: ReactNode }) {
   const { isLoading, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const { phase } = useLicense();
 
-  if (isLoading) {
+  if (isLoading || phase === "loading") {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -48,44 +30,15 @@ export function RequireAuth({
     );
   }
 
+  // Previously this returned `null`, which painted a blank page whenever the
+  // anonymous session was still missing (e.g. Firebase sign-in blocked) — the
+  // white screen the audit carried as #5. RedirectTo /activate now.
   if (!isAuthenticated) {
-    const returnTo = `${location.pathname}${location.search}`;
-    const signInHref = `/auth?returnTo=${encodeURIComponent(returnTo)}`;
+    return <Navigate to="/activate" replace />;
+  }
 
-    if (redirectImmediately) {
-      return <Navigate to={signInHref} replace />;
-    }
-
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-6">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <div className="flex justify-center">
-              <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
-                <Lock className="size-5 text-muted-foreground" />
-              </div>
-            </div>
-            <CardTitle className="text-xl">{title}</CardTitle>
-            <CardDescription>{description}</CardDescription>
-          </CardHeader>
-          <CardContent className="text-center text-sm text-muted-foreground">
-            سائن ان کے بعد آپ براہِ راست اسی صفحے پر واپس آ جائیں گے۔
-          </CardContent>
-          <CardFooter className="flex flex-col gap-2">
-            <Button className="w-full" onClick={() => navigate(signInHref)}>
-              سائن ان کریں
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full"
-              onClick={() => navigate("/")}
-            >
-              واپس صفحۂ اول پر
-            </Button>
-          </CardFooter>
-        </Card>
-      </main>
-    );
+  if (phase === "missing" || phase === "expired" || phase === "revoked") {
+    return <Navigate to="/activate" replace />;
   }
 
   return children;

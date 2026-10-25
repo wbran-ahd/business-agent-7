@@ -13,30 +13,29 @@ The following environment variables are automatically set during project creatio
 
 The `@vly-ai/integrations` package is already included in package.json.
 
-## Usage in Convex Actions
+## Usage in Server-Side Code
+
+The integration key is a server-side secret, so every call must happen in code
+that never ships to the browser. Import the configured client from
+`src/lib/vly-integrations.ts`:
 
 ```typescript
-"use node";
+import { vly } from '@/lib/vly-integrations';
 
-import { vly } from '../lib/vly-integrations';
-import { action } from "./_generated/server";
+export async function generateAIResponse(prompt: string) {
+  // AI Completions
+  const completion = await vly.completion({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: prompt }
+    ],
+    temperature: 0.7,
+    maxTokens: 150
+  });
 
-export const generateAIResponse = action({
-  handler: async (ctx, args) => {
-    // AI Completions
-    const completion = await freebuff.com.completion({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: 'Hello!' }
-      ],
-      temperature: 0.7,
-      maxTokens: 150
-    });
-    
-    return completion;
-  }
-});
+  return completion;
+}
 ```
 
 ## Available Features
@@ -44,7 +43,7 @@ export const generateAIResponse = action({
 ### AI Integration
 ```typescript
 // Create completion
-const completion = await freebuff.com.completion({
+const completion = await vly.completion({
   model: 'gpt-4o-mini', // or 'gpt-4o', 'claude-3-haiku', etc.
   messages: [...],
   temperature: 0.7,
@@ -113,7 +112,7 @@ interface ApiResponse<T> {
 Example error handling:
 
 ```typescript
-const result = await freebuff.com.completion({ ... });
+const result = await vly.completion({ ... });
 
 if (result.success) {
   console.log('Response:', result.data);
@@ -127,7 +126,7 @@ if (result.success) {
 
 1. The integration key (`VLY_INTEGRATION_KEY`) is automatically injected during project creation
 2. All API calls are automatically billed to your deployment based on usage
-3. Must be used in Convex actions with `"use node"` directive
+3. Must be called from server-side code only — never from the browser bundle
 4. The integration key should never be exposed to the client
 
 ## Checking Integration Status

@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "isAnonymous": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id"]
+    },
+    "Record": {
+      "title": "Record",
+      "description": "Income or expense ledger record",
+      "type": "object",
+      "properties": {
+        "localId": { "type": "number" },
+        "kind": { "type": "string", "enum": ["income", "expense"] },
+        "amount": { "type": "number" },
+        "detail": { "type": "string", "maxLength": 500 },
+        "category": { "type": "string", "maxLength": 100 },
+        "icon": { "type": "string", "maxLength": 100 },
+        "monthKey": { "type": "string", "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "date": { "type": "string", "maxLength": 50 },
+        "time": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "number" },
+        "account": { "type": "string", "enum": ["cash", "bank"] }
+      },
+      "required": ["localId", "kind", "amount", "monthKey", "timestamp"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User assistant preferences, budgets, and recurring items",
+      "type": "object",
+      "properties": {
+        "budgets": {
+          "type": "array",
+          "description": "Budget limits per category"
+        },
+        "recurring": {
+          "type": "array",
+          "description": "Recurring transactions"
+        },
+        "geminiKey": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "SyncState": {
+      "title": "SyncState",
+      "description": "Optimistic concurrency version for ledger sync",
+      "type": "object",
+      "properties": {
+        "version": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["version"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile document"
+    },
+    "/users/{userId}/records/{recordId}": {
+      "schema": "Record",
+      "description": "Ledger records subcollection"
+    },
+    "/users/{userId}/settings/current": {
+      "schema": "UserSettings",
+      "description": "Assistant settings document"
+    },
+    "/users/{userId}/sync/state": {
+      "schema": "SyncState",
+      "description": "Sync concurrency tracking document"
+    }
+  }
+}
