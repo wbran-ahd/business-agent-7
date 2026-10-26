@@ -4,9 +4,44 @@
  * Dark-theme styling matches the assistant panel: Nastaliq legend text,
  * translucent emerald / rose fills and a faint white grid. Every chart lives
  * in an explicitly sized wrapper so it never collapses to zero height.
+ *
+ * Audit 1.5.4 (SAU-302): `chart.js/auto` pulled in every controller and scale
+ * (~210 kB chunk). The app only draws doughnut, line and bar — those exact
+ * pieces are registered here instead, cutting the ChartsPanel chunk roughly in
+ * half. Add entries to this registry if a new chart type joins the panel.
  */
-import Chart from "chart.js/auto";
+import {
+  ArcElement,
+  BarController,
+  BarElement,
+  CategoryScale,
+  Chart,
+  DoughnutController,
+  Legend,
+  LineController,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+} from "chart.js";
 import { useEffect, useRef } from "react";
+
+Chart.register(
+  // Controllers — one per chart type the panel draws.
+  DoughnutController,
+  LineController,
+  BarController,
+  // Elements referenced by those controllers.
+  ArcElement,
+  LineElement,
+  PointElement,
+  BarElement,
+  // Scales & interaction plugins the options below rely on.
+  CategoryScale,
+  LinearScale,
+  Legend,
+  Tooltip,
+);
 
 const NASTALIQ = "Noto Nastaliq Urdu";
 const AXIS = "rgba(255, 255, 255, 0.6)";

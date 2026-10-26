@@ -40,6 +40,9 @@ import {
 /** Rows per Firestore batch write — Firestore maximum is 500 ops per batch. */
 const SYNC_CHUNK = 250;
 
+/** Where the Gemini key lives on this device. Never synced to Firestore. */
+const DEVICE_KEY_STORAGE = "sauti_gemini_key";
+
 type CloudRow = {
   localId: number;
   kind: EntryType;
@@ -95,7 +98,6 @@ export function useSync(data: DataState) {
   const [cloudSettings, setCloudSettings] = useState<{
     budgets?: Budget[];
     recurring?: RecurringEntry[];
-    geminiKey?: string;
   } | null>(null);
 
   const [budgetDraft, setBudgetDraft] = useState<Budget[] | null>(null);
@@ -195,10 +197,12 @@ export function useSync(data: DataState) {
     [recurringDraft, cloudSettings, localRecurring],
   );
 
+  /* Audit 2.1: the key is a device secret and never syncs to Firestore in
+     plaintext any more. It lives only in this device's localStorage, so the
+     "cloud" name below is historical — it now just means a key exists here. */
   const hasCloudKey =
     keySaved ||
-    Boolean(cloudSettings?.geminiKey) ||
-    Boolean(typeof window !== "undefined" && localStorage.getItem("sauti_gemini_key"));
+    Boolean(typeof window !== "undefined" && localStorage.getItem(DEVICE_KEY_STORAGE));
 
   const setBudgets: Dispatch<SetStateAction<Budget[]>> = useCallback(
     (value) =>
@@ -357,14 +361,13 @@ export function useSync(data: DataState) {
   const saveGeminiKey = useCallback(
     async (key: string) => {
       try {
-        localStorage.setItem("sauti_gemini_key", key);
+        /* Audit 2.1 / SAU-201: the key is stored device-local only. The old
+           code also wrote it as plaintext into Firestore (`…/settings/current`),
+           where any rules slip would expose it — that write is gone. When an
+           authenticated server-side store (Convex AES-GCM) is wired in, it
+           becomes the backend of this function instead of adding a cloud copy. */
+        localStorage.setItem(DEVICE_KEY_STORAGE, key);
         setKeySaved(true);
-
-        const currentUid = auth.currentUser?.uid;
-        if (isAuthenticated && currentUid && currentUid === user?.uid) {
-          const settingsRef = doc(db, "users", currentUid, "settings", "current");
-          await setDoc(settingsRef, { geminiKey: key, updatedAt: Date.now() }, { merge: true });
-        }
         setStatus(t("aiKeySaved"));
         return true;
       } catch (error) {
@@ -377,7 +380,7 @@ export function useSync(data: DataState) {
         return false;
       }
     },
-    [isAuthenticated, user],
+    [],
   );
 
   return {
