@@ -1,6 +1,14 @@
-import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
-import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
+
+/* Audit 1.5.1: the platform toolbar (and its framer-motion dependency) sat in
+   the synchronous entry chunk, taxing first paint on a 3G phone for a tool the
+   app itself never needs. It now loads only in a dev environment, post-first
+   paint, and is skipped entirely in production builds. */
+const VlyToolbar = lazy(() =>
+  import.meta.env.DEV
+    ? import("../vly-toolbar-readonly.tsx")
+    : Promise.resolve({ default: () => null }),
+);
 import {
   RouteLoading,
   RouteSyncer,
@@ -24,6 +32,7 @@ function initObservability() {
   const afterPaint = () => {
     void import("@/lib/sentry").then((module) => module.initSentry());
     void import("@/lib/analytics").then((module) => module.initAnalytics());
+    void import("@vly-ai/integrations").catch(() => {});
   };
   if (typeof window !== "undefined" && window.requestAnimationFrame) {
     // Double rAF === after first paint, before user input settles.
