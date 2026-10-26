@@ -42,19 +42,6 @@ import {
   readUserMode,
 } from "../src/lib/mode";
 import { useMode } from "../src/hooks/use-mode";
-import {
-  activationErrorMessage,
-  CODE_PATTERN,
-  formatCode,
-} from "../src/lib/activation";
-import { DEVICE_ID_PATTERN, getDeviceId } from "../src/lib/device-id";
-import {
-  activationLink,
-  ADMIN_UID,
-  adminLoginErrorMessage,
-  isAdminUid,
-} from "../src/lib/admin";
-import { readFileSync } from "node:fs";
 
 let passed = 0;
 const failures: string[] = [];
@@ -295,121 +282,6 @@ function verifyHook(): void {
 }
 
 /* ------------------------------------------------------------------ */
-/* Activation (phase 5)                                                */
-/* ------------------------------------------------------------------ */
-
-function verifyActivation(): void {
-  equal(
-    "Activation: plain payload formats",
-    formatCode("SAUTI1234ABCD5678"),
-    "SAUTI-1234-ABCD-5678",
-  );
-  equal(
-    "Activation: scanned payload formats (case + spaces)",
-    formatCode("sauti 1234 abcd 5678"),
-    "SAUTI-1234-ABCD-5678",
-  );
-  equal(
-    "Activation: unrelated text is not mangled into a code",
-    formatCode("hello world"),
-    "HELLOWORLD",
-  );
-  check(
-    "Activation: formatted code satisfies the server rule",
-    CODE_PATTERN.test(formatCode("SAUTI1234ABCD5678")),
-  );
-  check(
-    "Activation: a truncated code fails the server rule",
-    !CODE_PATTERN.test(formatCode("SAUTI1234")),
-  );
-
-  equal(
-    "Activation: the server's own Urdu message wins",
-    activationErrorMessage({ code: "functions/not-found", message: "یہ کوڈ درست نہیں ہے۔" }),
-    "یہ کوڈ درست نہیں ہے۔",
-  );
-  const internal = activationErrorMessage({ code: "functions/internal", message: "INTERNAL" });
-  check(
-    "Activation: bare SDK statuses are replaced with readable copy",
-    internal !== "INTERNAL" && internal.length > 0,
-    internal,
-  );
-
-  // The device id is persisted; give the hook the storage it expects.
-  const store = new Map<string, string>();
-  const holder = globalThis as unknown as { localStorage?: unknown };
-  holder.localStorage = {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
-  try {
-    const first = getDeviceId();
-    equal("Device id: stable across calls", getDeviceId(), first);
-    check("Device id: satisfies the server pattern", DEVICE_ID_PATTERN.test(first));
-  } finally {
-    delete holder.localStorage;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Run                                                                 */
-/* ------------------------------------------------------------------ */
-
-/**
- * Admin identity + panel helpers (audit #16).
- *
- * The whole admin model is one uid hard-coded in three places — the client
- * gate (`src/lib/admin.ts`), the Firestore rules (`isAdmin()`) and the
- * server gate (`functions/src/config.ts`). These checks read the actual files
- * and fail if any copy drifts from the one in the client lib.
- */
-function verifyAdmin(): void {
-  const uid = ADMIN_UID;
-  check("admin: admin uid looks non-trivial", uid.length >= 20);
-  check(
-    "admin: uid present in src/lib/admin.ts",
-    readFileSync("src/lib/admin.ts", "utf8").includes(uid),
-  );
-  check(
-    "admin: same uid hardcoded in firestore.rules (isAdmin)",
-    readFileSync("firestore.rules", "utf8").includes(uid),
-  );
-  check(
-    "admin: same uid hardcoded in functions/src/config.ts",
-    readFileSync("functions/src/config.ts", "utf8").includes(uid),
-  );
-  check("admin: isAdminUid accepts owner", isAdminUid(uid) === true);
-  check("admin: isAdminUid rejects anyone else", isAdminUid("a".repeat(28)) === false);
-  check("admin: isAdminUid rejects empty", isAdminUid("") === false);
-
-  // In plain Node/Bun there is no window, so `publicOrigin("")` resolves to
-  // the fallback and the link is origin-relative — assert the shape, not the
-  // host (in the browser it is the full absolute URL).
-  const link = activationLink("SAUTI-ABCD-EFGH-2345");
-  check(
-    "admin: activationLink ends with /activate?c=<code>",
-    link.endsWith("/activate?c=SAUTI-ABCD-EFGH-2345"),
-    link,
-  );
-
-  const mapped = adminLoginErrorMessage({ code: "auth/invalid-email" });
-  check("admin: login error copy is Urdu, not the raw SDK code", mapped.length > 0 && !mapped.startsWith("auth/"));
-  const passthrough = adminLoginErrorMessage({
-    code: "functions/not-found",
-    message: "یہ کوڈ درست نہیں ہے۔",
-  });
-  check(
-    "admin: server Urdu message passes through unchanged",
-    passthrough === "یہ کوڈ درست نہیں ہے۔",
-    passthrough,
-  );
-  check(
-    "admin: unknown auth/* still yields readable fallback",
-    adminLoginErrorMessage({ code: "auth/brand-new-code" }).length > 0,
-  );
-}
-
-/* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
   await verifySentry();
@@ -417,8 +289,6 @@ async function main(): Promise<void> {
   verifyMode();
   await verifyModeReader();
   verifyHook();
-  verifyActivation();
-  verifyAdmin();
 
   console.log(`\n${passed} checks passed, ${failures.length} failed.`);
   if (failures.length > 0) {

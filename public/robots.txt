@@ -1,8 +1,6 @@
-# سپائیڈروں کے لیے عام اجازت؛ admin ایکسنو کے لیے خصوصی (یہ رابطہ انڈیکس نہیں چاہیے)۔
+# سپائیڈروں کے لیے عام اجازت۔
 User-agent: *
 Allow: /
-Disallow: /admin
-Disallow: /admin/login
 Disallow: /dashboard
 
 # سائٹ میپ — ڈیپلائے بعد جس host پر لائیو ہو، وہیں اپ ڈیٹ کریں (docs/DEPLOY.md)۔

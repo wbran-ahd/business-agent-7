@@ -88,7 +88,7 @@ function toEntries(rows: CloudRow[], kind: EntryType): Entry[] {
 }
 
 export function useSync(data: DataState) {
-  const { user, isAuthenticated, signOut } = useAuth();
+  const { user, isAuthenticated } = useAuth();
 
   const [cloudRecords, setCloudRecords] = useState<CloudRow[]>([]);
   const [cloudVersion, setCloudVersion] = useState(0);
@@ -382,7 +382,6 @@ export function useSync(data: DataState) {
 
   return {
     isAuthenticated,
-    signOut,
     cloudVersion,
     cloudCount: cloudRecords.length,
     aiHasKey: hasCloudKey,

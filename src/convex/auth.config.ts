@@ -16,8 +16,7 @@ export default {
     // via OIDC discovery at `${domain}/.well-known/openid-configuration`,
     // served by auth.addHttpRoutes() in convex/http.ts. Do NOT convert this
     // entry to `type: "customJwt"` — that path rejects tokens without a
-    // `kid` header, so sign-in would silently never confirm and RequireAuth
-    // would loop back to /auth forever.
+    // `kid` header, so sign-in would silently never confirm a session.
     {
       domain: process.env.CONVEX_SITE_URL!,
       applicationID: "convex",

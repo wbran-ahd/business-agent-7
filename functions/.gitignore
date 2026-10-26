@@ -1,9 +1,0 @@
-node_modules/
-lib/
-*.log
-
-# Local function environment — secrets belong in Google Secret Manager
-# (`firebase functions:secrets:set NAME`), never in a committed file.
-.env
-.env.local
-.secret.local

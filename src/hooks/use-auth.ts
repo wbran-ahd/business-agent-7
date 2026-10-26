@@ -1,24 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { auth, db } from "@/lib/firebase";
-import {
-  onAuthStateChanged,
-  signOut as fbSignOut,
-  User as FirebaseUser,
-} from "firebase/auth";
+import { onAuthStateChanged, signInAnonymously, User as FirebaseUser } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 /**
- * Identity for صوتی بقیہ.
+ * Silent data safeguard for صوتی بقیہ.
  *
- * Access is QR/activation-code only, so there is no sign-up form and no
- * provider choice: Firebase anonymous auth mints a stable uid on the device and
- * the activation flow (`/activate`) upgrades that uid with a license. Keeping
- * identity anonymous means the app needs no email address, no password and no
- * third-party consent screen at any point.
+ * The app opens straight into the ledger, so there is no login screen and no
+ * account to create. Firestore rules still scope every read and write to
+ * `users/{uid}`, so the device mints an anonymous Firebase session in the
+ * background. The user never sees it; it only keeps the same uid the device
+ * already had, which is what makes the existing cloud data reachable.
  *
- * `use-license` is what starts the anonymous session (it has to, because it
- * must know whether the device is already activated). This hook only observes
- * the resulting Firebase user, so it stays a passive mirror of auth state.
+ * Local-first: if anonymous sign-in is unavailable (offline, disabled), the
+ * ledger keeps working on-device and `isAuthenticated` stays false so cloud
+ * actions degrade instead of blocking the UI.
  */
 
 export interface AppUser {
@@ -37,48 +33,65 @@ function mapUser(fbUser: FirebaseUser): AppUser {
   };
 }
 
+/**
+ * One bootstrap at a time: StrictMode double-mounts and several hooks call
+ * `useAuth` simultaneously, and concurrent `signInAnonymously` calls would
+ * otherwise race to create more than one identity.
+ */
+let bootstrap: Promise<boolean> | null = null;
+
+function ensureAnonymousSession(): Promise<boolean> {
+  if (auth.currentUser) return Promise.resolve(true);
+  if (!bootstrap) {
+    bootstrap = signInAnonymously(auth)
+      .then(() => true)
+      .catch(() => {
+        bootstrap = null;
+        return false;
+      });
+  }
+  return bootstrap;
+}
+
 export function useAuth() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    let cancelled = false;
+
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      if (cancelled) return;
+
       if (!fbUser) {
-        setUser(null);
-        setIsLoading(false);
+        // No session yet: mint the silent anonymous one. Loading stays true
+        // until it resolves so consumers do not treat this as "denied".
+        void ensureAnonymousSession().then((ok) => {
+          if (!cancelled && !ok) setIsLoading(false);
+        });
         return;
       }
 
       const mappedUser = mapUser(fbUser);
       setUser(mappedUser);
-
-      // Audit #26: only anonymous sessions need a profile document. The admin
-      // email account must not mint its own profile doc (and pay an write per
-      // sign-in) for a collection nothing reads for it.
-      if (fbUser.isAnonymous) {
-        await ensureUserProfile(fbUser, mappedUser);
-      }
       setIsLoading(false);
+
+      // Audit #26: only anonymous sessions need a profile document.
+      if (fbUser.isAnonymous) {
+        void ensureUserProfile(fbUser, mappedUser);
+      }
     });
 
-    return () => unsubscribe();
-  }, []);
-
-  const signOut = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      await fbSignOut(auth).catch(() => {});
-      setUser(null);
-    } finally {
-      setIsLoading(false);
-    }
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   return {
     isLoading,
     isAuthenticated: Boolean(user),
     user,
-    signOut,
   };
 }
 

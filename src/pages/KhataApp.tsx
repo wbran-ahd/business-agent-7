@@ -12,7 +12,6 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router";
 import { AppShell, type NavId } from "@/components/layout/index";
 import {
   LedgerHeader,
@@ -122,8 +121,7 @@ function khataDraftToEntry(
 export default function SautiBaqaya() {
   const khata = useKhata();
   const sync = useSync(khata.data);
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
 
   // "balance" is the read-only متوسط view MetricBoxes opens — NotepadModal's
   // actual prop type (EntryType | "balance" | null) is the truth here.
@@ -494,7 +492,7 @@ export default function SautiBaqaya() {
       return;
     }
     if (!sync.isAuthenticated) {
-      sync.setStatus(t("aiKeyNeedsActivation"));
+      sync.setStatus(t("aiKeyNeedsConnection"));
       setSettingsOpen(false);
       return;
     }
@@ -506,7 +504,7 @@ export default function SautiBaqaya() {
 
   async function handleUpload() {
     if (!sync.isAuthenticated) {
-      sync.setStatus("پہلے ایپ ایکٹیویٹ کریں تاکہ ڈیٹا کلاؤڈ پر محفوظ ہو۔");
+      sync.setStatus("کلاؤڈ سینک کے لیے آن لائن شناخت درکار ہے۔");
       return;
     }
     const ok = await sync.upload();
@@ -583,14 +581,6 @@ export default function SautiBaqaya() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  async function handleSignOut() {
-    try {
-      await signOut();
-    } finally {
-      navigate("/");
-    }
-  }
-
   function handleNavigate(id: NavId) {
     if (id === "ledger") {
       goHome();
@@ -618,7 +608,6 @@ export default function SautiBaqaya() {
       totals={khata.totals}
       digitStyle={khata.prefs.digitStyle}
       onNavigate={handleNavigate}
-      onSignOut={() => void handleSignOut()}
     >
       {/* Main Glass Panel — edge-to-edge with square outer corners. The width
           cap and the outer padding wrapper used to box it inside the screen,
@@ -779,7 +768,6 @@ export default function SautiBaqaya() {
         setUploadConfirmOpen={setUploadConfirmOpen}
         onConfirmUpload={handleUpload}
         onDownload={handleDownload}
-        onSignOut={() => void sync.signOut()}
         ttsEnabled={khata.prefs.ttsEnabled}
         onSetTtsEnabled={khata.setTtsEnabled}
         ttsRate={khata.prefs.ttsRate}

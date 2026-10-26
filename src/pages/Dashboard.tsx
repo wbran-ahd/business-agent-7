@@ -1,11 +1,10 @@
 import KhataApp from "./KhataApp";
 
 /**
- * The authenticated product: صوتی بقیہ — the voice ledger.
+ * صوتی بقیہ — the voice ledger, and the app's entry point.
  *
- * `RequireAuth` in `main.tsx` guards this route, so everyone who reaches it is
- * signed in and lands straight in the workspace (sidebar, ledger panel,
- * analytics and settings) rather than on placeholder copy.
+ * `main.tsx` mounts this at `/`, so opening the app lands straight in the
+ * workspace (sidebar, ledger panel, analytics and settings).
  */
 export default function Dashboard() {
   return <KhataApp />;

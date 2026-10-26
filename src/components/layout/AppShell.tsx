@@ -3,7 +3,6 @@ import { Link } from "react-router";
 import logo from "@/assets/logo.svg";
 import {
   BarChart3,
-  LogOut,
   Menu,
   Mic,
   Settings,
@@ -37,7 +36,6 @@ interface AppShellProps {
   };
   digitStyle: DigitStyle;
   onNavigate: (view: NavId) => void;
-  onSignOut: () => void;
   children: ReactNode;
 }
 
@@ -52,7 +50,6 @@ export function AppShell({
   totals,
   digitStyle,
   onNavigate,
-  onSignOut,
   children,
 }: AppShellProps) {
   const navItems: { id: NavId; label: string; icon: typeof Mic }[] = [
@@ -124,15 +121,6 @@ export function AppShell({
           کلاؤڈ سینک فعال
         </span>
       </span>
-      <button
-        type="button"
-        onClick={onSignOut}
-        aria-label="سائن آؤٹ"
-        title="سائن آؤٹ"
-        className="shrink-0 rounded-lg border border-white/15 p-2 text-white/55 transition hover:border-rose-400/40 hover:text-rose-300"
-      >
-        <LogOut className="size-4" />
-      </button>
     </div>
   );
 

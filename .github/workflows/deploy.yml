@@ -7,10 +7,7 @@ name: Deploy to Firebase
 # never publish to production by accident — deploys stay a deliberate act.
 #
 # `hosting-only` is the lightweight path: frontend build, then
-# `firebase deploy --only hosting`. It never installs or builds the functions
-# project and never touches Secret Manager — firebase-tools schedules predeploy
-# hooks per selected target, and `--only hosting` excludes `functions`, so the
-# functions predeploy hook cannot run on this path.
+# `firebase deploy --only hosting`. It never touches Firestore rules.
 #
 # Setup (once): add the repository secret FIREBASE_SERVICE_ACCOUNT
 # (Settings → Secrets and variables → Actions). The value is the service-account
@@ -24,20 +21,12 @@ on:
         description: What to deploy
         required: true
         type: choice
-        default: hosting-and-functions
+        default: hosting-and-rules
         options:
-          - hosting-and-functions
+          - hosting-and-rules
           - hosting-only
-          - functions-only
+          - rules-only
           - everything
-      set_activation_pepper:
-        description: >-
-          First deploy only: also write ACTIVATION_PEPPER to Secret Manager.
-          Leave off afterwards — changing the pepper invalidates the hashes of
-          every existing unused voucher.
-        required: false
-        type: boolean
-        default: false
 
 # Two production deploys must never overlap, and a queued one should finish
 # rather than be cancelled halfway through.
@@ -56,7 +45,6 @@ jobs:
     environment: production
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-      ACTIVATION_PEPPER: ${{ secrets.ACTIVATION_PEPPER }}
       DEPLOY_TARGETS: ${{ inputs.targets }}
       # Pinned to the v15 major line; the CLI is fetched on demand, so no
       # firebase-tools dependency is added to the project.
@@ -68,7 +56,7 @@ jobs:
         with:
           bun-version: latest
 
-      # nodejs22 matches functions.runtime in firebase.json.
+      # firebase-tools (fetched through npx) needs a current Node runtime.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -91,15 +79,6 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # Needed only when functions are part of the deploy. A fresh checkout has
-      # no functions/node_modules, and firebase.json's functions predeploy runs
-      # `npm run build` there; without this that build fails to resolve
-      # firebase-functions/firebase-admin and aborts the deploy. Skipped for
-      # hosting-only, which never selects the functions target.
-      - name: Install functions dependencies
-        if: ${{ inputs.targets != 'hosting-only' }}
-        run: npm --prefix functions ci
-
       - name: Typecheck
         run: bun run typecheck
 
@@ -109,35 +88,15 @@ jobs:
       - name: Build frontend
         run: bun run build
 
-      # Skipped for hosting-only: nothing consumes functions/lib on this path.
-      - name: Build functions
-        if: ${{ inputs.targets != 'hosting-only' }}
-        run: npm --prefix functions run build
-
-      # Skipped for hosting-only: this writes to Secret Manager and is only
-      # meaningful when functions are deployed.
-      - name: Write ACTIVATION_PEPPER secret
-        if: ${{ inputs.set_activation_pepper && inputs.targets != 'hosting-only' }}
-        run: |
-          if [ -z "$ACTIVATION_PEPPER" ]; then
-            echo "::error::ACTIVATION_PEPPER secret is not set, but set_activation_pepper was enabled."
-            echo "Add the repository secret ACTIVATION_PEPPER first (a random 32-byte hex string)."
-            exit 1
-          fi
-          printf '%s' "$ACTIVATION_PEPPER" > "$RUNNER_TEMP/pepper.txt"
-          chmod 600 "$RUNNER_TEMP/pepper.txt"
-          $FIREBASE_CLI functions:secrets:set ACTIVATION_PEPPER --data-file "$RUNNER_TEMP/pepper.txt"
-          rm -f "$RUNNER_TEMP/pepper.txt"
-
       - name: Deploy
         run: |
           case "$DEPLOY_TARGETS" in
-            hosting-and-functions) only="hosting,functions" ;;
+            hosting-and-rules)     only="hosting,firestore:rules" ;;
             hosting-only)          only="hosting" ;;
-            functions-only)        only="functions" ;;
+            rules-only)            only="firestore:rules" ;;
             # Index deploys can drop indexes the live app relies on, which is
             # why this is not part of the default.
-            everything)            only="firestore:rules,firestore:indexes,functions,hosting" ;;
+            everything)            only="firestore:rules,firestore:indexes,hosting" ;;
             *) echo "::error::Unknown targets '$DEPLOY_TARGETS'"; exit 1 ;;
           esac
           echo "Deploying: $only"
@@ -146,4 +105,4 @@ jobs:
 
       - name: Remove credentials
         if: ${{ always() }}
-        run: rm -f "$RUNNER_TEMP/firebase-service-account.json" "$RUNNER_TEMP/pepper.txt"
+        run: rm -f "$RUNNER_TEMP/firebase-service-account.json"

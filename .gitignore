@@ -9,14 +9,8 @@ dist/
 # Platform preview/build workspace artifacts.
 freebuff-sites-build/
 
-# Node dependency trees — use bun.lock for the frontend and
-# functions/package-lock.json only if you intentionally commit it.
+# Node dependency trees — use bun.lock for the frontend.
 node_modules/
-functions/node_modules/
-
-# Compiled Cloud Functions output. Source stays in functions/src/; the compiled
-# lib/ and its map files are build artifacts, not source.
-functions/lib/
 
 # Firebase CLI local state and admin credentials.
 # A service-account JSON can bypass every Firestore rule, so it must never reach

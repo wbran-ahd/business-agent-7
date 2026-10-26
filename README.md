@@ -9,8 +9,8 @@ confirms it aloud, watches the budget and turns the month into a report.
 
 | Screen | Path |
 | --- | --- |
-| Landing page | [/](https://site-f9ff23f69f4a4445a559ab1a2a03f28f.freebuff.page/) |
-| Dashboard (protected) | [/dashboard](https://site-f9ff23f69f4a4445a559ab1a2a03f28f.freebuff.page/dashboard) |
+| Ledger / Desk (entry point) | [/](https://site-f9ff23f69f4a4445a559ab1a2a03f28f.freebuff.page/) |
+| Old dashboard links | [/dashboard](https://site-f9ff23f69f4a4445a559ab1a2a03f28f.freebuff.page/dashboard) → redirects to `/` |
 
 The deployment is the production bundle of `main`, served as a static SPA with
 `index.html` as the fallback for unknown paths; the static worker and deploy
@@ -20,7 +20,7 @@ manifest live in [`deploy/`](deploy/). Build it the same way locally:
 bun install          # install dependencies (bun.lock is committed)
 bun run dev          # http://localhost:3000
 bun run typecheck    # tsc -b --noEmit
-bun run test         # ledger + scaffolding checks (275 assertions)
+bun run test         # ledger + scaffolding checks
 VITE_PUBLIC_ORIGIN=https://<your-origin> bun run build   # production bundle in dist/
 ```
 
@@ -72,7 +72,6 @@ to configure or push to.
 | Variable | Purpose |
 | --- | --- |
 | `SAUTI_KEY_SECRET` | AES-GCM key that encrypts the stored Gemini API key; unset stores it unencrypted |
-| `ACTIVATION_PEPPER` | Cloud Functions secret that peppers voucher hashes and activation tokens (`firebase functions:secrets:set ACTIVATION_PEPPER`) |
 | `VLY_INTEGRATION_KEY` | VLY integration key for AI and payment calls |
 | `VLY_INTEGRATION_BASE_URL` | Integration gateway, defaults to `https://integrations.vly.ai` |
 
@@ -92,15 +91,18 @@ deployment, so it gates every push to `main` as well as every pull request.
 
 # Authentication
 
-Access is **QR / activation-code only**. Email, password and Google sign-in
-were removed; no sign-in form exists anywhere in the app.
+There is **no login, activation or licence gate**. Opening `/` mounts the
+ledger directly; no sign-in form, activation screen or admin panel exists.
 
-`src/hooks/use-auth.ts` observes Firebase's anonymous identity — the only way a
-client obtains a uid — and mirrors the `users/{uid}` profile document.
-`src/components/RequireAuth.tsx` renders the product only when that identity
-exists. The activation gate that checks a code and a license is built on top of
-those two files, so nothing in a component should ever redirect to a sign-in
-page.
+`src/hooks/use-auth.ts` silently mints an **anonymous Firebase session** in the
+background and mirrors the `users/{uid}` profile document. That uid is what
+keeps the owner-scoped Firestore rules working — the same device keeps the same
+identity, so existing cloud data stays reachable without asking the user for
+anything. If anonymous sign-in is unavailable the app stays fully usable
+locally and cloud actions degrade.
+
+There is no sign-out: dropping the anonymous session would create a new uid and
+strand the device's cloud data.
 
 ## Using Auth in your components
 
@@ -109,7 +111,7 @@ You MUST use this hook to get user data. Never do this yourself without the hook
 ```typescript
 import { useAuth } from "@/hooks/use-auth";
 
-const { isLoading, isAuthenticated, user, signOut } = useAuth();
+const { isLoading, isAuthenticated, user } = useAuth();
 ```
 
 Firestore access is scoped per uid under `users/{uid}/...`, and
@@ -241,9 +243,8 @@ Ideally, instead of using a new page, use a Dialog instead.
 # Using the Firebase backend
 
 This app has no HTTP server of its own. Firebase is the backend: Firebase
-Auth handles identity, Firestore holds the cloud copy of the ledger, and
-[`functions/`](functions/) holds the callable activation/licensing functions
-(`activate`, `checkStatus` and the admin callables) deployed through
+Auth silently provides an anonymous identity, Firestore holds the cloud copy of
+the ledger, and Hosting serves the built SPA via
 [`firebase.json`](firebase.json). Firestore rules govern access and are checked
 in at [`firestore.rules`](firestore.rules).
 
@@ -260,10 +261,6 @@ read another user's rows:
 | `users/{uid}/sync/state` | sync version token | `src/hooks/use-sync.ts` |
 | `users/{uid}/parties` | customers and suppliers | `src/hooks/use-parties.ts` |
 | `users/{uid}/partyTxns` | shop (party) transactions | `src/hooks/use-parties.ts` |
-
-Licensing lives at the database root and is written **only** by Cloud
-Functions — never by the app: `codes`, `licenses/{uid}`, `audit_log`,
-`rate_limits`.
 
 The local device stays the source of truth. `src/lib/khata.ts` holds the ledger
 in `localStorage` and `src/lib/parties.ts` holds the party book; Firestore is a

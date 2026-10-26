@@ -28,62 +28,6 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // ---------------------------------------------------------------------
-    // Activation licensing helpers
-    //
-    // Admin is identified by a hard-coded Firebase Auth uid (decision 2):
-    // there is no admin claim, no admins document and no login screen of its
-    // own. Replace the placeholder below with the uid of the admin account
-    // before deploying rules; until then this helper matches nobody, so every
-    // admin read fails closed.
-    //
-    // The licensing collections themselves are written only by Cloud
-    // Functions with the Admin SDK (which bypasses these rules). Clients never
-    // write a code, a licence, a rate-limit counter or an audit entry.
-    // ---------------------------------------------------------------------
-    function isAdmin() {
-      return isSignedIn() && request.auth.uid == 'vDzRVOYUgMNwcvD5oBdPVibDFFq1';
-    }
-
-    // ---------------------------------------------------------------------
-    // Licence-backed feature gate (enforcement #5).
-    //
-    // The AI advisor is still a local stub, so the only server-side lever we
-    // have is this: the Gemini key may not be stored in Firestore unless the
-    // caller's licence is active and carries the `ai` feature. `let` binding
-    // keeps it to one get() per evaluation (rules allow 10 per request).
-    // ---------------------------------------------------------------------
-    function licensePath() {
-      return /databases/$(database)/documents/licenses/$(request.auth.uid);
-    }
-
-    function licenceHolds(feature) {
-      let licence = get(licensePath()).data;
-      let expiry = licence.get('license_expires_at', null);
-      return licence.get('revoked', false) == false
-        && (expiry == null || ((expiry is int || expiry is float) && expiry > request.time.toMillis()))
-        && feature in licence.get('features', []);
-    }
-
-    function hasActiveFeature(feature) {
-      return isSignedIn()
-        && exists(licensePath())
-        && licenceHolds(feature);
-    }
-
-    // True when this request is actually storing a *new* Gemini key.
-    // `incoming()` is the merged document, so a settings write that merely
-    // carries an existing key must not re-trigger the gate — otherwise budgets
-    // would stop saving the moment a key was set once.
-    function writesAiKey(isNewDoc) {
-      return 'geminiKey' in incoming()
-        && incoming().geminiKey is string
-        && incoming().geminiKey.size() > 0
-        && (isNewDoc
-            || !('geminiKey' in resource.data)
-            || resource.data.geminiKey != incoming().geminiKey);
-    }
-
     // Test connection doc for initial boot verification
     match /test/connection {
       allow get: if true;
@@ -136,11 +80,9 @@ service cloud.firestore {
       match /settings/{docId} {
         allow get: if isOwner(userId);
         allow create: if isOwner(userId)
-          && (!('geminiKey' in incoming()) || (incoming().geminiKey is string && incoming().geminiKey.size() <= 200))
-          && (!writesAiKey(true) || hasActiveFeature('ai'));
+          && (!('geminiKey' in incoming()) || (incoming().geminiKey is string && incoming().geminiKey.size() <= 200));
         allow update: if isOwner(userId)
-          && (!('geminiKey' in incoming()) || (incoming().geminiKey is string && incoming().geminiKey.size() <= 200))
-          && (!writesAiKey(false) || hasActiveFeature('ai'));
+          && (!('geminiKey' in incoming()) || (incoming().geminiKey is string && incoming().geminiKey.size() <= 200));
         allow delete: if isOwner(userId);
       }
 
@@ -206,41 +148,5 @@ service cloud.firestore {
       }
     }
 
-    // ---------------------------------------------------------------------
-    // Activation licensing — merged in phase 2, additive only. Everything
-    // above (users, records, settings, sync) is unchanged.
-    // ---------------------------------------------------------------------
-
-    // Voucher codes. The plain code is never stored, only its hash; admin may
-    // read the list to render the panel, nobody may write from a client.
-    match /codes/{codeId} {
-      allow get, list: if isAdmin();
-      allow write: if false;
-    }
-
-    // Per-user licence, keyed by uid so `/licenses/{uid}` is the owner's own
-    // document. Writes come from Functions only (activate, reset, revoke).
-    match /licenses/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow list: if isAdmin();
-      allow write: if false;
-    }
-
-    // Append-only trail of admin and activation actions.
-    match /audit_log/{entryId} {
-      allow get, list: if isAdmin();
-      allow write: if false;
-    }
-
-    // Sliding-window counters for rate limiting. Server-side only.
-    match /rate_limits/{key} {
-      allow read, write: if false;
-    }
-
-    // Reserved. Admin identity is the hard-coded uid above, not a document,
-    // so this collection is deliberately unreachable from any client.
-    match /admins/{userId} {
-      allow read, write: if false;
-    }
   }
 }

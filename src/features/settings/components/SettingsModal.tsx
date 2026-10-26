@@ -47,7 +47,6 @@ interface SettingsModalProps {
   setUploadConfirmOpen: (open: boolean) => void;
   onConfirmUpload: () => void;
   onDownload: () => void;
-  onSignOut: () => void;
   ttsEnabled: boolean;
   onSetTtsEnabled: (enabled: boolean) => void;
   ttsRate: number;
@@ -89,7 +88,6 @@ export function SettingsModal({
   setUploadConfirmOpen,
   onConfirmUpload,
   onDownload,
-  onSignOut,
   ttsEnabled,
   onSetTtsEnabled,
   ttsRate,
@@ -310,37 +308,21 @@ export function SettingsModal({
         <h3 className="text-sm font-bold text-white/85 mb-2">
           <i className="fas fa-cloud text-sky-300 ml-1"></i> کلاؤڈ سینک
         </h3>
-        {isAuthenticated ? (
-          <div className="flex gap-2">
-            <button
-              onClick={() => setUploadConfirmOpen(true)}
-              disabled={syncBusy || !isAuthenticated}
-              className={`${smallBtn} flex-1 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border-sky-500/40 disabled:opacity-50`}
-            >
-              <i className="fas fa-cloud-arrow-up"></i> اپ لوڈ
-            </button>
-            <button
-              onClick={onDownload}
-              className={`${smallBtn} flex-1 bg-white/10 hover:bg-white/20 text-white border-white/20`}
-            >
-              <i className="fas fa-cloud-arrow-down"></i> ڈاؤن لوڈ
-            </button>
-            <button
-              onClick={onSignOut}
-              aria-label="سائن آؤٹ کریں"
-              className={`${smallBtn} bg-white/5 hover:bg-white/10 text-white/70 border-white/20`}
-            >
-              <i className="fas fa-right-from-bracket"></i>
-            </button>
-          </div>
-        ) : (
-          <a
-            href="/activate"
-            className={`${smallBtn} w-full justify-center bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border-sky-500/40 no-underline`}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setUploadConfirmOpen(true)}
+            disabled={syncBusy || !isAuthenticated}
+            className={`${smallBtn} flex-1 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border-sky-500/40 disabled:opacity-50`}
           >
-            <i className="fas fa-right-to-bracket"></i> ایکٹیویٹ کریں تاکہ ڈیٹا کلاؤڈ پر رہے
-          </a>
-        )}
+            <i className="fas fa-cloud-arrow-up"></i> اپ لوڈ
+          </button>
+          <button
+            onClick={onDownload}
+            className={`${smallBtn} flex-1 bg-white/10 hover:bg-white/20 text-white border-white/20`}
+          >
+            <i className="fas fa-cloud-arrow-down"></i> ڈاؤن لوڈ
+          </button>
+        </div>
         <p className="text-[11px] text-white/40 mt-2">ورژن: {cloudVersion}</p>
         {syncStatus && <p className="text-[11px] text-white/60 mt-1">{syncStatus}</p>}
         {capWarning && (

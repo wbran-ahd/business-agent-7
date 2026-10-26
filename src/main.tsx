@@ -1,8 +1,5 @@
 import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
-import { RequireAuth } from "@/components/RequireAuth";
-// Small guard (uid check only) — eager so the route can never flash unguarded.
-import { AdminRoute } from "./pages/admin/components/AdminRoute";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import {
   RouteLoading,
@@ -12,7 +9,7 @@ import {
 } from "@/components/RoutePrimitives";
 import { StrictMode, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 // Self-hosted fonts first, so the @font-face rules exist before the theme CSS.
 import "./styles/fonts.css";
 import "./index.css";
@@ -37,11 +34,7 @@ function initObservability() {
 }
 
 // Lazy load route components for better code splitting
-const Landing = lazy(() => import("./pages/Landing.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
-const Activation = lazy(() => import("./pages/Activation.tsx"));
-const AdminLogin = lazy(() => import("./pages/admin/AdminLogin.tsx"));
-const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // روٹ لوڈنگ فال بیک، error boundaries اور RouteSyncer اب RoutePrimitives.tsx
@@ -58,26 +51,10 @@ createRoot(document.getElementById("root")!).render(
         <RouteSyncer />
         <Suspense fallback={<RouteLoading />}>
           <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/activate" element={<Activation />} />
-            {/* Admin is uid-guarded, never licence-gated: see AdminRoute. */}
-            <Route path="/admin/login" element={<AdminLogin />} />
-            <Route
-              path="/admin"
-              element={
-                <AdminRoute>
-                  <AdminDashboard />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="/dashboard"
-              element={
-                <RequireAuth>
-                  <Dashboard />
-                </RequireAuth>
-              }
-            />
+            {/* The ledger is the entry point: no activation screen, no gate. */}
+            <Route path="/" element={<Dashboard />} />
+            {/* Kept so old links, bookmarks and the PWA shortcut still land. */}
+            <Route path="/dashboard" element={<Navigate to="/" replace />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
