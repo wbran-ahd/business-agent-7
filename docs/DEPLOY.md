@@ -202,6 +202,34 @@ bun run build && firebase deploy
 
 **یہ کیا کرتا ہے:** فرانت بلڈ + rules + indexes + functions + hosting — سب ایک ساتھ۔ functions کا build `predeploy` خود کر لیتا ہے۔
 
+## 📱 موبائل سے ایک ٹیپ ڈیپلائے (GitHub Actions)
+
+کمپیوٹر یا Cloud Shell کی ضرورت نہیں۔ GitHub موبائل ایپ سے براہِ راست ڈیپلائے کریں۔
+
+### ایک بار کی تیاری
+
+1. GitHub → ریپو → **Settings → Secrets and variables → Actions**
+2. **New repository secret** → نام: `FIREBASE_SERVICE_ACCOUNT`
+   ویلیو: Firebase Console → ⚙️ Project settings → Service accounts → **Generate new private key** سے ملی JSON فائل کا پورا مواد۔
+3. (صرف پہلی بار، اختیاری) دوسرا secret بنائیں: `ACTIVATION_PEPPER` — ویلیو `openssl rand -hex 32` کا نتیجہ۔
+
+> 🔴 service-account JSON نہ ریپو میں commit کریں، نہ کسی کو بھیجیں — یہ سارے Firestore rules بائی پاس کرتی ہے۔ صرف GitHub کے secret store میں رہے۔
+
+### ڈیپلائے کیسے کریں
+
+1. GitHub ایپ → **Actions** → **Deploy to Firebase** → **Run workflow**
+2. `targets` چنیں:
+   - `hosting-and-functions` — ڈیفالٹ: UI + فنکشنز
+   - `hosting-only` — صرف UI
+   - `functions-only` — صرف فنکشنز
+   - `everything` — rules + indexes بھی (احتیاط: جو indexes فائل میں نہیں وہ ڈیلیٹ ہو سکتے ہیں)
+3. پہلی بار `set_activation_pepper` کو ✅ آن کریں — صرف اس وقت جب `ACTIVATION_PEPPER` secret سیٹ ہو۔ واؤچر بننے کے بعد اسے **کبھی** آن نہ کریں۔
+4. **Run workflow** دبائیں → تقریباً 3–5 منٹ۔
+
+یہ workflow خود یہ سب کرتا ہے: typecheck، ledger ٹیسٹ، فرانت بلڈ، functions بلڈ، اور پھر ڈیپلائے — یعنی ٹوٹا ہوا کوڈ لائیو نہیں جاتا۔
+
+> ✅ یہ workflow صرف ہاتھ سے چلتا ہے۔ کسی push یا merge پر خودکار ڈیپلائے **نہیں** ہوتا۔
+
 ---
 
 ## ڈیپلائے کے بعد — چیک لسٹ

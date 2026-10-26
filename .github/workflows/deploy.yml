@@ -1,0 +1,137 @@
+name: Deploy to Firebase
+
+# One-tap production deploy, meant to be run from the GitHub mobile app:
+#   Actions → "Deploy to Firebase" → Run workflow
+#
+# Deliberately manual-only. Nothing here triggers on push, so merging code can
+# never publish to production by accident — deploys stay a deliberate act.
+#
+# Setup (once): add the repository secret FIREBASE_SERVICE_ACCOUNT
+# (Settings → Secrets and variables → Actions). The value is the service-account
+# JSON from Firebase Console → Project settings → Service accounts. A
+# service-account file bypasses every Firestore rule, so it must live only in
+# GitHub's secret store — never in the repo, a commit, or a chat message.
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: What to deploy
+        required: true
+        type: choice
+        default: hosting-and-functions
+        options:
+          - hosting-and-functions
+          - hosting-only
+          - functions-only
+          - everything
+      set_activation_pepper:
+        description: >-
+          First deploy only: also write ACTIVATION_PEPPER to Secret Manager.
+          Leave off afterwards — changing the pepper invalidates the hashes of
+          every existing unused voucher.
+        required: false
+        type: boolean
+        default: false
+
+# Two production deploys must never overlap, and a queued one should finish
+# rather than be cancelled halfway through.
+concurrency:
+  group: firebase-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    # Gives each run a deployment record (and a URL) in the GitHub UI.
+    environment: production
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      ACTIVATION_PEPPER: ${{ secrets.ACTIVATION_PEPPER }}
+      DEPLOY_TARGETS: ${{ inputs.targets }}
+      # Pinned to the v15 major line; the CLI is fetched on demand, so no
+      # firebase-tools dependency is added to the project.
+      FIREBASE_CLI: npx --yes firebase-tools@15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # nodejs22 matches functions.runtime in firebase.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check deploy credentials are configured
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::Repository secret FIREBASE_SERVICE_ACCOUNT is not set."
+            echo "Add it under Settings → Secrets and variables → Actions, then run this workflow again."
+            exit 1
+          fi
+
+      - name: Authenticate to Firebase
+        run: |
+          creds="$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$creds"
+          chmod 600 "$creds"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$creds" >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # A fresh checkout has no functions/node_modules, and firebase.json's
+      # functions predeploy runs `npm run build` there. Without this step that
+      # build fails to resolve firebase-functions/firebase-admin and aborts the
+      # whole deploy.
+      - name: Install functions dependencies
+        run: npm --prefix functions ci
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Ledger logic tests
+        run: bun run test
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Build functions
+        run: npm --prefix functions run build
+
+      - name: Write ACTIVATION_PEPPER secret
+        if: ${{ inputs.set_activation_pepper }}
+        run: |
+          if [ -z "$ACTIVATION_PEPPER" ]; then
+            echo "::error::ACTIVATION_PEPPER secret is not set, but set_activation_pepper was enabled."
+            echo "Add the repository secret ACTIVATION_PEPPER first (a random 32-byte hex string)."
+            exit 1
+          fi
+          printf '%s' "$ACTIVATION_PEPPER" > "$RUNNER_TEMP/pepper.txt"
+          chmod 600 "$RUNNER_TEMP/pepper.txt"
+          $FIREBASE_CLI functions:secrets:set ACTIVATION_PEPPER --data-file "$RUNNER_TEMP/pepper.txt"
+          rm -f "$RUNNER_TEMP/pepper.txt"
+
+      - name: Deploy
+        run: |
+          case "$DEPLOY_TARGETS" in
+            hosting-and-functions) only="hosting,functions" ;;
+            hosting-only)          only="hosting" ;;
+            functions-only)        only="functions" ;;
+            # Index deploys can drop indexes the live app relies on, which is
+            # why this is not part of the default.
+            everything)            only="firestore:rules,firestore:indexes,functions,hosting" ;;
+            *) echo "::error::Unknown targets '$DEPLOY_TARGETS'"; exit 1 ;;
+          esac
+          echo "Deploying: $only"
+          # --force skips interactive confirmations, which a CI run cannot answer.
+          $FIREBASE_CLI deploy --only "$only" --force
+
+      - name: Remove credentials
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/firebase-service-account.json" "$RUNNER_TEMP/pepper.txt"
