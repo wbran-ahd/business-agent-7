@@ -6,6 +6,12 @@ name: Deploy to Firebase
 # Deliberately manual-only. Nothing here triggers on push, so merging code can
 # never publish to production by accident — deploys stay a deliberate act.
 #
+# `hosting-only` is the lightweight path: frontend build, then
+# `firebase deploy --only hosting`. It never installs or builds the functions
+# project and never touches Secret Manager — firebase-tools schedules predeploy
+# hooks per selected target, and `--only hosting` excludes `functions`, so the
+# functions predeploy hook cannot run on this path.
+#
 # Setup (once): add the repository secret FIREBASE_SERVICE_ACCOUNT
 # (Settings → Secrets and variables → Actions). The value is the service-account
 # JSON from Firebase Console → Project settings → Service accounts. A
@@ -85,11 +91,13 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # A fresh checkout has no functions/node_modules, and firebase.json's
-      # functions predeploy runs `npm run build` there. Without this step that
-      # build fails to resolve firebase-functions/firebase-admin and aborts the
-      # whole deploy.
+      # Needed only when functions are part of the deploy. A fresh checkout has
+      # no functions/node_modules, and firebase.json's functions predeploy runs
+      # `npm run build` there; without this that build fails to resolve
+      # firebase-functions/firebase-admin and aborts the deploy. Skipped for
+      # hosting-only, which never selects the functions target.
       - name: Install functions dependencies
+        if: ${{ inputs.targets != 'hosting-only' }}
         run: npm --prefix functions ci
 
       - name: Typecheck
@@ -101,11 +109,15 @@ jobs:
       - name: Build frontend
         run: bun run build
 
+      # Skipped for hosting-only: nothing consumes functions/lib on this path.
       - name: Build functions
+        if: ${{ inputs.targets != 'hosting-only' }}
         run: npm --prefix functions run build
 
+      # Skipped for hosting-only: this writes to Secret Manager and is only
+      # meaningful when functions are deployed.
       - name: Write ACTIVATION_PEPPER secret
-        if: ${{ inputs.set_activation_pepper }}
+        if: ${{ inputs.set_activation_pepper && inputs.targets != 'hosting-only' }}
         run: |
           if [ -z "$ACTIVATION_PEPPER" ]; then
             echo "::error::ACTIVATION_PEPPER secret is not set, but set_activation_pepper was enabled."
