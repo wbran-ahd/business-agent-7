@@ -61,12 +61,22 @@ function withList(
     : { ...state, expense: mutate(state.expense) };
 }
 
+/**
+ * Undo history is bounded so a long voice/session run cannot grow memory (or
+ * the persisted blob) without limit. The oldest entries fall off first — undo
+ * keeps reversing the most recent adds, which is what users actually expect.
+ */
+export const UNDO_STACK_LIMIT = 50;
+
 export function khataReducer(state: DataState, command: KhataCommand): DataState {
   switch (command.kind) {
     case "add":
       return {
         ...withList(state, command.entryType, (list) => [...list, command.entry]),
-        undoStack: [...state.undoStack, { type: command.entryType, record: command.entry }],
+        undoStack: [
+          ...state.undoStack,
+          { type: command.entryType, record: command.entry },
+        ].slice(-UNDO_STACK_LIMIT),
       };
     case "update":
       return withList(state, command.entryType, (list) =>
@@ -201,6 +211,9 @@ export function useKhata() {
     (digitStyle: DigitStyle) => setPrefs((current) => ({ ...current, digitStyle })),
     [],
   );
+  /* Stable callback: it is passed to memoised overlays, and a fresh reference
+     each render made every keystroke re-render the whole notepad subtree. */
+  const clearValidationError = useCallback(() => setValidationError(null), []);
   /* Voice feedback settings — deliberately part of `Prefs`, so they persist
      with the rest of the display preferences instead of a separate store. */
   const setTtsEnabled = useCallback(
@@ -235,7 +248,7 @@ export function useKhata() {
     monthName: formatMonthName(activeMonth),
     isCurrentMonth: activeMonth === getCurrentMonthKey(),
     validationError,
-    clearValidationError: () => setValidationError(null),
+    clearValidationError,
     addEntry,
     updateEntry,
     removeEntry,
