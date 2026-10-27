@@ -1,14 +1,4 @@
 import { Toaster } from "@/components/ui/sonner";
-
-/* Audit 1.5.1: the platform toolbar (and its framer-motion dependency) sat in
-   the synchronous entry chunk, taxing first paint on a 3G phone for a tool the
-   app itself never needs. It now loads only in a dev environment, post-first
-   paint, and is skipped entirely in production builds. */
-const VlyToolbar = lazy(() =>
-  import.meta.env.DEV
-    ? import("../vly-toolbar-readonly.tsx")
-    : Promise.resolve({ default: () => null }),
-);
 import {
   RouteLoading,
   RouteSyncer,
@@ -21,6 +11,19 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 // Self-hosted fonts first, so the @font-face rules exist before the theme CSS.
 import "./styles/fonts.css";
 import "./index.css";
+
+// Audit 1.5.1: the platform toolbar (and its framer-motion dependency) sat in
+// the synchronous entry chunk, taxing first paint on a 3G phone for a tool the
+// app itself never needs. It now loads only in a dev environment, post-first
+// paint, and is skipped entirely in production builds.
+// (The lazy() call must sit AFTER the react import above — `lazy` is pulled in
+// by a const binding, and the previous order (usage before the import textually)
+// crashed the module with "Cannot access 'lazy' before initialization".)
+const VlyToolbar = lazy(() =>
+  import.meta.env.DEV
+    ? import("../vly-toolbar-readonly.tsx")
+    : Promise.resolve({ default: () => null }),
+);
 
 // Optional observability. Both are silent no-ops until .env has a DSN/key, and
 // neither renders anything — the UI is untouched. Audit #32: they no longer sit
