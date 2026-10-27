@@ -4,9 +4,11 @@
  * A magic `25` used to sit inline in `use-sync.ts`; both the settings copy and
  * any future UI read it from here.
  *
- * ⚠️ HONEST LIMIT NOTE: nothing server-side *enforces* this limit yet. The
- * Cloud Functions rate-limit `status` policy (60 / 5 min) is the only real
- * guard. Enforcing a daily quota belongs to the real Gemini integration, not
- * this constant.
+ * ⚠️ HONEST LIMIT NOTE: the UI-facing constant is advisory. The real
+ * enforcement lives server-side in the Convex `analyze` action, which checks
+ * `getAiQuota` before calling Gemini and only decrements the daily allowance
+ * through `consumeAiQuota` after a model actually answered. Keep this constant
+ * in sync with `src/convex/sync.ts`'s `AI_DAILY_LIMIT`, or wire them through
+ * one import.
  */
 export const AI_DAILY_LIMIT = 25;

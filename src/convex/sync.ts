@@ -400,7 +400,11 @@ async function materialiseRecurring(
     });
   }
 
-  await ctx.db.patch(doc._id, { appliedKeys: Array.from(applied) });
+  /* Bounded growth: only the current month's keys are ever consulted by the
+     `due` filter above, so keys from older months are dead weight and pruned
+     here instead of living in the settings document forever. */
+  const kept = Array.from(applied).filter((key) => key.startsWith(`${monthKey}|`));
+  await ctx.db.patch(doc._id, { appliedKeys: kept });
   return due.length;
 }
 
