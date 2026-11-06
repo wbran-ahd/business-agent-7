@@ -23,12 +23,12 @@ const AI_DAILY_LIMIT = 25;
 /** Cached insights stay fresh for this long. */
 const AI_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-const accountKind = v.union(
-  v.literal("cash"),
-  v.literal("jazzcash"),
-  v.literal("easypaisa"),
-  v.literal("bank"),
-);
+/**
+ * Cash or bank only. The mobile-wallet values an older build accepted
+ * (`jazzcash`, `easypaisa`) are gone; the client normalizes any legacy value to
+ * `cash`, so a stored wallet row still reads and re-syncs safely.
+ */
+const accountKind = v.union(v.literal("cash"), v.literal("bank"));
 
 const recordValidator = v.object({
   localId: v.number(),
@@ -66,7 +66,7 @@ type RecordRow = {
   date: string;
   time: string;
   timestamp: number;
-  account?: "cash" | "jazzcash" | "easypaisa" | "bank";
+  account?: "cash" | "bank";
 };
 
 function currentMonthKey(now: Date = new Date()): string {
@@ -325,15 +325,15 @@ export const setGeminiKey = mutation({
 });
 
 /**
- * Whether an AI key is available to the caller: their own saved key, or the
- * project-level `GEMINI_API_KEY` from the Keys / API keys UI.
+ * Whether an AI key is available to the caller: their own saved key, or a
+ * project-level `ZAI_API_KEY` / `GEMINI_API_KEY` from the Keys / API keys UI.
  */
 export const aiStatus = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     const doc = userId === null ? null : await getSettingsDoc(ctx, userId);
-    const hasKey = Boolean(doc?.geminiKey || process.env.GEMINI_API_KEY);
+    const hasKey = Boolean(doc?.geminiKey || process.env.ZAI_API_KEY || process.env.GEMINI_API_KEY);
     const isToday = doc?.aiDay === new Date().toISOString().slice(0, 10);
     const used = isToday ? doc?.aiCalls ?? 0 : 0;
     return {

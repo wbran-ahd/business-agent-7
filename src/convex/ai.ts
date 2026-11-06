@@ -1,11 +1,14 @@
 "use node";
 
 /**
- * Gemini-powered financial analysis for صوتی بقیہ.
+ * AI-powered financial analysis for صوتی بقیہ.
  *
  * Runs as a Convex Node action so the API key never reaches the browser.
- * Resolution order: the user's own key (AES-GCM encrypted at rest), then the
- * project's `GEMINI_API_KEY` from the Keys / API keys UI.
+ * Provider resolution order:
+ *   1. Z.ai — project `ZAI_API_KEY` from the Keys / API keys UI
+ *      (OpenAI-compatible endpoint; `ZAI_API_BASE` optionally overrides the base URL)
+ *   2. Gemini — the user's own key (AES-GCM encrypted at rest), then the
+ *      project's `GEMINI_API_KEY` from the Keys / API keys UI.
  *
  * Two guards keep a single key from being drained:
  *   • a per-user daily quota (see `consumeAiQuota`)
@@ -148,7 +151,7 @@ function fallbackInsight(): Insight {
     spoken:
       "اے آئی تجزیہ ابھی دستیاب نہیں۔ براہِ مہربانی سیٹنگز میں اپنی اے آئی کی چیک کریں۔",
     insight:
-      "AI تجزیہ کے لیے Settings میں Gemini API Key درج کریں، یا پروجیکٹ کی Keys / API keys tab میں GEMINI_API_KEY سیٹ کریں۔",
+      "AI تجزیہ کے لیے پروجیکٹ کی Keys / API keys tab میں ZAI_API_KEY یا GEMINI_API_KEY سیٹ کریں، یا Settings میں اپنی Gemini API Key درج کریں۔",
     topCategory: "-",
     riskLevel: "unavailable",
   };
@@ -167,6 +170,79 @@ function normaliseInsight(raw: Record<string, unknown>): Insight {
     topCategory: String(raw.topCategory ?? "-"),
     riskLevel,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Z.ai — OpenAI-compatible chat completions                           */
+/* ------------------------------------------------------------------ */
+
+/** Newest flagship first, older models as fallbacks. */
+const ZAI_MODELS = ["glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6"];
+
+const ZAI_DEFAULT_BASE = "https://api.z.ai/api/paas/v4";
+
+function zaiBaseUrl(): string {
+  const custom = (process.env.ZAI_API_BASE ?? "").trim().replace(/\/+$/, "");
+  return custom || ZAI_DEFAULT_BASE;
+}
+
+/** OpenAI-style response: choices[0].message.content (a JSON string). */
+function extractOpenAiText(payload: unknown): string {
+  const root = payload as {
+    choices?: { message?: { content?: string | { text?: string } } }[];
+  };
+  const content = root.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (content && typeof content.text === "string") return content.text;
+  return "";
+}
+
+async function callZai(apiKey: string, prompt: string): Promise<Insight | null> {
+  const url = `${zaiBaseUrl()}/chat/completions`;
+  /* `response_format: json_object` requires the word JSON in the prompt. */
+  const userPrompt = `${prompt}\n\nJSON object کے طور پر جواب دیں (JSON only).`;
+  for (const model of ZAI_MODELS) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: userPrompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+          max_tokens: 600,
+        }),
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!response.ok) {
+        const body = (await response.text().catch(() => "")).slice(0, 200);
+        console.warn(`[ai] z.ai ${model} failed: ${response.status} ${body}`);
+        continue;
+      }
+
+      const text = extractOpenAiText(await response.json()).trim();
+      if (!text) continue;
+
+      try {
+        return normaliseInsight(JSON.parse(text) as Record<string, unknown>);
+      } catch {
+        return {
+          title: "ای آئی جائزہ",
+          spoken: text.slice(0, 180),
+          insight: text,
+          topCategory: "-",
+          riskLevel: "low",
+        };
+      }
+    } catch {
+      // network / timeout — try the next model
+    }
+  }
+  return null;
 }
 
 async function callGemini(apiKey: string, body: string): Promise<Insight | null> {
@@ -217,9 +293,10 @@ export const analyze = action({
     const cached = (await ctx.runQuery(internal.sync.getAiCache, { key })) as Insight | null;
     if (cached) return cached;
 
-    let apiKey = await ctx.runQuery(internal.sync.getStoredGeminiKey, {});
-    if (!apiKey) apiKey = process.env.GEMINI_API_KEY ?? "";
-    if (!apiKey) return fallbackInsight();
+    const zaiKey = process.env.ZAI_API_KEY ?? "";
+    let geminiKey = await ctx.runQuery(internal.sync.getStoredGeminiKey, {});
+    if (!geminiKey) geminiKey = process.env.GEMINI_API_KEY ?? "";
+    if (!zaiKey && !geminiKey) return fallbackInsight();
 
     /* Check the quota without spending it — it is only consumed after a model
        actually answers, so a failed call no longer burns the daily allowance. */
@@ -228,20 +305,27 @@ export const analyze = action({
       throw new Error("آج کی اے آئی کی حد ختم ہو چکی ہے — کل دوبارہ کوشش کریں۔");
     }
 
-    const result = await callGemini(
-      apiKey,
-      JSON.stringify({
-        contents: [{ parts: [{ text: buildPrompt(input) }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema,
-          temperature: 0.7,
-          maxOutputTokens: 600,
-        },
-      }),
-    );
+    let result: Insight | null = null;
+    if (zaiKey) {
+      result = await callZai(zaiKey, buildPrompt(input));
+      if (!result) console.warn("[ai] Z.ai failed — falling back to Gemini");
+    }
+    if (!result && geminiKey) {
+      result = await callGemini(
+        geminiKey,
+        JSON.stringify({
+          contents: [{ parts: [{ text: buildPrompt(input) }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+            temperature: 0.7,
+            maxOutputTokens: 600,
+          },
+        }),
+      );
+    }
 
-    if (!result) throw new Error("Gemini جائزہ ناکام: کوئی مدل جواب نہیں دے سکا");
+    if (!result) throw new Error("AI جائزہ ناکام: کوئی مدل جواب نہیں دے سکا");
 
     await ctx.runMutation(internal.sync.consumeAiQuota, {});
 
