@@ -42,6 +42,19 @@ export type PartyTxn = {
   date: string;
   /** Display only (Urdu); never parsed. */
   time: string;
+  /**
+   * Stage 4C-C: the customer/supplier classification of the party at the time
+   * this entry was made.
+   *
+   * It is optional on purpose: every transaction written before this stage has
+   * no such field, and a backup or cloud document from an older device keeps
+   * working (`partyKindForTxn` falls back to the party row when it exists). It
+   * exists so a historical entry is still interpretable — and therefore still
+   * counted correctly as a receipt or a supplier payment — after its party has
+   * been deleted. No migration is needed: the field is filled in for new
+   * entries and, locally, for the entries of a party that is being deleted.
+   */
+  partyKind?: PartyKind;
 };
 
 export type PartyBook = { parties: Party[]; txns: PartyTxn[] };
@@ -108,7 +121,35 @@ export function partyBalance(book: PartyBook, partyId: number): number {
   return partySummary(book, partyId).balance;
 }
 
-/** Total the shop still has to collect (customers) / pay (suppliers). */
+/**
+ * The kind that governs one transaction: the party's current kind when the
+ * party still exists (an edit wins, exactly as before this stage), otherwise
+ * the kind stored on the transaction itself (stage 4C-C). `undefined` means a
+ * legacy entry whose party is gone — nothing can interpret it safely, so it is
+ * never guessed (and therefore never treated as a customer receivable).
+ */
+export function partyKindForTxn(
+  txn: PartyTxn,
+  kinds?: Map<number, PartyKind>,
+): PartyKind | undefined {
+  const fromBook = kinds?.get(txn.partyId);
+  if (fromBook) return fromBook;
+  return txn.partyKind === "customer" || txn.partyKind === "supplier"
+    ? txn.partyKind
+    : undefined;
+}
+
+/**
+ * Total the shop still has to collect (customers) / pay (suppliers) for the
+ * parties that still exist.
+ *
+ * Stage 4C-C: a transaction whose party has been deleted is **not** part of this
+ * figure. It used to be, and because the deleted party was not in `book.parties`
+ * a deleted supplier's debt fell into the `receivable` bucket — the shop's own
+ * payable counted as money a customer owed. Such transactions are still money
+ * the shop owes or is owed; `deletedPartyTotals` reports them separately so the
+ * figure is preserved instead of silently disappearing.
+ */
 export function outstandingTotals(book: PartyBook): {
   receivable: number;
   payable: number;
@@ -118,6 +159,7 @@ export function outstandingTotals(book: PartyBook): {
   const kinds = new Map(book.parties.map((party) => [party.id, party.kind]));
   const totals = new Map<number, number>();
   for (const txn of book.txns) {
+    if (!kinds.has(txn.partyId)) continue;
     const current = totals.get(txn.partyId) ?? 0;
     totals.set(txn.partyId, current + (txn.kind === "charge" ? txn.amount : -txn.amount));
   }
@@ -127,6 +169,53 @@ export function outstandingTotals(book: PartyBook): {
     else receivable += balance;
   }
   return { receivable, payable };
+}
+
+export type DeletedPartyTotals = {
+  /** Still owed to the shop by deleted customers. */
+  receivable: number;
+  /** Still owed by the shop to deleted suppliers. */
+  payable: number;
+  /** Legacy entries whose party is gone and whose kind is unknown — never guessed. */
+  unclassified: number;
+  /** Deleted party ids that still have financial history in the book. */
+  parties: number;
+  /** How many entries those balances are made of. */
+  txns: number;
+};
+
+/**
+ * Outstanding money attached to **deleted** parties (stage 4C-C).
+ *
+ * Party deletion is not a settlement: the debt survives the row. This keeps it
+ * visible to the accounting layer, separately from the active-party summary, so
+ * deleting a party never cancels what it owes or is owed and never mixes it into
+ * the active totals. It is deliberately not shown in the UI in this stage.
+ */
+export function deletedPartyTotals(book: PartyBook): DeletedPartyTotals {
+  const active = new Set(book.parties.map((party) => party.id));
+  const totals = new Map<number, number>();
+  const kinds = new Map<number, PartyKind>();
+  let txns = 0;
+  for (const txn of book.txns) {
+    if (active.has(txn.partyId)) continue;
+    txns += 1;
+    const current = totals.get(txn.partyId) ?? 0;
+    totals.set(txn.partyId, current + (txn.kind === "charge" ? txn.amount : -txn.amount));
+    const kind = partyKindForTxn(txn);
+    if (kind) kinds.set(txn.partyId, kind);
+  }
+  let receivable = 0;
+  let payable = 0;
+  let unclassified = 0;
+  for (const [partyId, balance] of totals) {
+    if (balance <= 0) continue;
+    const kind = kinds.get(partyId);
+    if (kind === "supplier") payable += balance;
+    else if (kind === "customer") receivable += balance;
+    else unclassified += balance;
+  }
+  return { receivable, payable, unclassified, parties: totals.size, txns };
 }
 
 /* ------------------------------------------------------------------ */
@@ -200,7 +289,13 @@ function isTxn(value: unknown): value is PartyTxn {
     typeof row?.id === "number" &&
     typeof row?.partyId === "number" &&
     typeof row?.amount === "number" &&
-    (row.kind === "charge" || row.kind === "payment")
+    (row.kind === "charge" || row.kind === "payment") &&
+    /* Stage 4C-C: optional (older backups have none); when present it must be a
+       real classification, otherwise the entry is dropped like any other
+       malformed row. */
+    (row.partyKind === undefined ||
+      row.partyKind === "customer" ||
+      row.partyKind === "supplier")
   );
 }
 
@@ -243,13 +338,35 @@ export function makeParty(
   };
 }
 
+/**
+ * The shape actually handed to `setDoc`.
+ *
+ * `makeParty` leaves `note: undefined` when the shop stored no note, and
+ * Firestore rejects `undefined` field values outright (`invalid-argument`).
+ * Every noteless party therefore threw inside its own `.catch(...)` and never
+ * reached the cloud while looking like a successful save locally — confirmed
+ * against the emulator. Dropping the key is exactly what the rules expect:
+ * `note` is optional there, and the reader reconstructs it as `undefined`.
+ */
+export function partyForCloud(party: Party): Omit<Party, "note"> | Party {
+  const { note, ...rest } = party;
+  return note ? { ...rest, note } : rest;
+}
+
 export function makePartyTxn(
   partyId: number,
-  input: { kind: PartyTxnKind; amount: number; note?: string; account?: AccountKind },
+  input: {
+    kind: PartyTxnKind;
+    amount: number;
+    note?: string;
+    account?: AccountKind;
+    /** Stage 4C-C: keeps the entry interpretable after the party is deleted. */
+    partyKind?: PartyKind;
+  },
   id = nextId(),
 ): PartyTxn {
   const now = new Date();
-  return {
+  const txn: PartyTxn = {
     id,
     partyId,
     kind: input.kind,
@@ -260,6 +377,47 @@ export function makePartyTxn(
     date: now.toLocaleDateString("ur-PK"),
     time: now.toLocaleTimeString("ur-PK", { hour: "2-digit", minute: "2-digit" }),
   };
+  if (input.partyKind === "customer" || input.partyKind === "supplier") {
+    txn.partyKind = input.partyKind;
+  }
+  return txn;
+}
+
+/**
+ * Can this party receive a new entry? (stage 4C-C)
+ *
+ * A deleted party never can. The book may have already dropped the row, and
+ * even while a stale copy is still in memory a remembered tombstone wins — the
+ * window between a deletion and the next cloud snapshot must not be usable.
+ */
+export function partyAcceptsNewTxn(
+  parties: Party[],
+  partyId: number,
+  deletedIds: Iterable<number> = [],
+): boolean {
+  if (!parties.some((party) => party.id === partyId)) return false;
+  for (const id of deletedIds) {
+    if (id === partyId) return false;
+  }
+  return true;
+}
+
+/**
+ * Fills in `partyKind` for a deleted party's entries (stage 4C-C).
+ *
+ * The party row is the last thing that knows whether its history was a customer
+ * receivable or a supplier payable, so the kind is copied onto the entries right
+ * before the party disappears. Entries that already carry a kind are untouched,
+ * which keeps the operation idempotent and non-destructive.
+ */
+export function stampPartyKind(
+  txns: PartyTxn[],
+  partyId: number,
+  kind: PartyKind,
+): PartyTxn[] {
+  return txns.map((txn) =>
+    txn.partyId === partyId && txn.partyKind === undefined ? { ...txn, partyKind: kind } : txn,
+  );
 }
 
 /** JSON backup of the party book (separate from the ledger CSV). */

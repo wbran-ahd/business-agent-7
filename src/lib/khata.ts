@@ -47,6 +47,15 @@ export type Entry = {
   time: string;
   /** Epoch ms — ordering, sorting and cloud sync all use this. */
   timestamp: number;
+  /**
+   * Epoch ms of the last edit on this device (add counts as the first edit).
+   *
+   * `timestamp` is the transaction time and never changes when the user edits a
+   * record, so it cannot answer "which copy is newer?" during a cloud merge.
+   * This optional field does, and it stays optional: records written before it
+   * existed fall back to `timestamp`, so no migration is needed.
+   */
+  updatedAt?: number;
   /** Cash or bank. Missing means cash. */
   account?: AccountKind;
 };
@@ -752,6 +761,96 @@ export function dedupeEntries(existing: Entry[], incoming: Entry[]): Entry[] {
 }
 
 /* ------------------------------------------------------------------ */
+/* Import validation                                                   */
+/* ------------------------------------------------------------------ */
+const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** True when a stored value can be used as a month bucket. */
+export function isMonthKey(value: unknown): value is string {
+  return typeof value === "string" && MONTH_KEY_PATTERN.test(value.trim());
+}
+
+/**
+ * Turns untrusted rows (JSON backup, hand-edited file) into records the ledger
+ * can safely store.
+ *
+ * Why this exists: the JSON import path used to push whatever array the file
+ * contained straight into the reducer, so `{"amount":"abc"}`, `null` or a
+ * missing `monthKey` produced `NaN` totals and phantom month groups that could
+ * not be repaired from the UI. Every field is now checked; rows that cannot be
+ * represented are dropped and counted instead of half-imported.
+ *
+ * Ids are reused only when they are valid *and* unused by the current ledger,
+ * so editing/deleting an imported row can never hit an unrelated record.
+ */
+export function sanitizeImportedEntries(
+  rows: unknown,
+  existing: Entry[] = [],
+): { entries: Entry[]; rejected: number } {
+  const entries: Entry[] = [];
+  let rejected = 0;
+  if (!Array.isArray(rows)) return { entries, rejected: 0 };
+
+  const usedIds = new Set<number>(existing.map((entry) => entry.id));
+
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      rejected += 1;
+      continue;
+    }
+
+    const candidate = raw as Partial<Entry>;
+    const amount = validateAmount(candidate.amount);
+    if (!amount.ok) {
+      rejected += 1;
+      continue;
+    }
+
+    const detail = typeof candidate.detail === "string" ? candidate.detail : "";
+    const timestamp =
+      typeof candidate.timestamp === "number" && Number.isFinite(candidate.timestamp)
+        ? candidate.timestamp
+        : Date.now();
+
+    const monthKey = isMonthKey(candidate.monthKey)
+      ? candidate.monthKey.trim()
+      : getCurrentMonthKey(new Date(timestamp));
+
+    const detected = detectCategory(detail);
+    const category =
+      typeof candidate.category === "string" && candidate.category.trim()
+        ? candidate.category.trim()
+        : detected.name;
+    const icon =
+      typeof candidate.icon === "string" && candidate.icon.trim()
+        ? candidate.icon.trim()
+        : (CATEGORY_CATALOG.find((c) => c.name === category)?.icon ?? detected.icon);
+
+    const providedId =
+      typeof candidate.id === "number" && Number.isFinite(candidate.id) && candidate.id >= 0
+        ? Math.round(candidate.id)
+        : null;
+    const id = providedId !== null && !usedIds.has(providedId) ? providedId : nextId();
+    usedIds.add(id);
+
+    entries.push({
+      id,
+      amount: amount.value,
+      detail,
+      category,
+      icon,
+      monthKey,
+      date: typeof candidate.date === "string" ? candidate.date : "",
+      time: typeof candidate.time === "string" ? candidate.time : "",
+      timestamp,
+      account: normalizeAccount(candidate.account),
+    });
+  }
+
+  return { entries, rejected };
+}
+
+/* ------------------------------------------------------------------ */
 /* CSV backup & restore                                                */
 /* ------------------------------------------------------------------ */
 /**
@@ -849,8 +948,13 @@ export function entriesFromCsv(
   const expense: Entry[] = [];
   for (let r = 1; r < rows.length; r += 1) {
     const row = rows[r];
-    const amount = Number.parseFloat(normalizeDigits(row[iAmount] ?? "").replace(/[^\d.-]/g, ""));
-    if (!Number.isFinite(amount)) continue;
+    // Same rule as the manual/voice path: positive, finite, sane. A negative or
+    // zero row used to slip in and skew the monthly totals it landed in.
+    const parsedAmount = Number.parseFloat(
+      normalizeDigits(row[iAmount] ?? "").replace(/[^\d.-]/g, ""),
+    );
+    const amount = validateAmount(parsedAmount);
+    if (!amount.ok) continue;
     const detail = (row[iDetail] ?? "").trim();
     const category = (row[iCat] ?? "").trim() || detectCategory(detail).name;
     const icon =
@@ -858,11 +962,11 @@ export function entriesFromCsv(
     const timestamp = nextId();
     const entry: Entry = {
       id: timestamp,
-      amount,
+      amount: amount.value,
       detail,
       category,
       icon,
-      monthKey: (row[iMonth] ?? "").trim() || getCurrentMonthKey(),
+      monthKey: isMonthKey(row[iMonth]) ? row[iMonth].trim() : getCurrentMonthKey(),
       date: (row[iDate] ?? "").trim() || "",
       time: (row[iTime] ?? "").trim() || "",
       timestamp,

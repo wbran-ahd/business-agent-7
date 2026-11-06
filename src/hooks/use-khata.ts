@@ -32,7 +32,20 @@ import {
   type EntryType,
   type Prefs,
 } from "@/lib/khata";
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { rememberDeletedIds } from "@/lib/sync-safety";
+import { enqueuePendingDeletion } from "@/lib/deletion-sync";
+import { logEvent } from "@/lib/logger";
+
+/** Reports a deletion that could not be stored for cloud delivery. */
+function reportQueueIssue(entryId: number, queue: { persisted: boolean; dropped: number }) {
+  if (queue.persisted && queue.dropped === 0) return;
+  logEvent("sync", "error", "pending deletion could not be stored on this device", {
+    entryId,
+    persisted: queue.persisted,
+    dropped: queue.dropped,
+  });
+}
 
 export type AddEntryInput = {
   type: EntryType;
@@ -126,12 +139,21 @@ export function makeRecord(input: AddEntryInput, id = nextId()): Entry {
     date: now.toLocaleDateString("ur-PK"),
     time: now.toLocaleTimeString("ur-PK", { hour: "2-digit", minute: "2-digit" }),
     timestamp: now.getTime(),
+    updatedAt: now.getTime(),
     account: normalizeAccount(input.account),
   };
 }
 
 export function useKhata() {
   const [data, dispatch] = useReducer(khataReducer, undefined, loadData);
+  /* Lets `removeEntry` read the current ledger while keeping a stable identity
+     (it is passed down to memoised children). Updated in an effect, not during
+     render, so the record snapshot a deletion queues is always the committed
+     one. */
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const [prefs, setPrefs] = useState<Prefs>(() => loadPrefs());
   const [activeMonth, setActiveMonth] = useState<string>(() => getCurrentMonthKey());
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -180,6 +202,13 @@ export function useKhata() {
             category,
             icon,
             account,
+            /* Edit time only ever moves forward on this device; cloud sync
+               compares it against the cloud copy (never against `timestamp`,
+               which is the transaction date). */
+            updatedAt: Math.max(
+              Date.now(),
+              (existing.updatedAt ?? existing.timestamp ?? 0) + 1,
+            ),
           }
         : makeRecord({ ...input, amount: result.value }, id);
 
@@ -195,10 +224,38 @@ export function useKhata() {
   );
 
   const removeEntry = useCallback(
-    (entryType: EntryType, id: number) => dispatch({ kind: "remove", entryType, id }),
+    (entryType: EntryType, id: number) => {
+      /* Two notes, both needed (stage 4A):
+         1. the device-local marker keeps the next Cloud Download from pulling
+            the record back in immediately;
+         2. the pending deletion is what travels to Firestore as a tombstone, so
+            the other devices delete it too. It is queued here and delivered on
+            the next Cloud Upload, because deleting is a user action and must
+            never depend on the network being up right now. */
+      const entry = (
+        entryType === "income" ? dataRef.current.income : dataRef.current.expense
+      ).find((item) => item.id === id);
+      rememberDeletedIds([id]);
+      if (entry) reportQueueIssue(id, enqueuePendingDeletion(entry, entryType).queue);
+      dispatch({ kind: "remove", entryType, id });
+    },
     [],
   );
-  const undo = useCallback(() => dispatch({ kind: "undo" }), []);
+  const undo = useCallback(() => {
+    /* `undo` takes the last added record *out* of the ledger — the same effect
+       the delete button has, so it needs the same two notes: the local marker
+       and a pending deletion. Undo is still undo (the record is removed); it is
+       not a restore feature, and nothing here makes a deleted record come back. */
+    const last = data.undoStack[data.undoStack.length - 1];
+    if (last) {
+      rememberDeletedIds([last.record.id]);
+      reportQueueIssue(
+        last.record.id,
+        enqueuePendingDeletion(last.record, last.type).queue,
+      );
+    }
+    dispatch({ kind: "undo" });
+  }, [data.undoStack]);
   const replaceAll = useCallback(
     (income: Entry[], expense: Entry[]) => dispatch({ kind: "replaceAll", income, expense }),
     [],
@@ -224,6 +281,26 @@ export function useKhata() {
     (ttsRate: number) => setPrefs((current) => ({ ...current, ttsRate: clampTtsRate(ttsRate) })),
     [],
   );
+  /**
+   * Remembers that a monthly rule already produced its entry for `monthKey`.
+   *
+   * Without it the rule was only matched against the records still present, so
+   * deleting an auto-added entry made the mirror effect add it straight back.
+   * The list lives in `prefs.appliedRecurring`, which already existed for this
+   * purpose but was never written.
+   */
+  const markRecurringApplied = useCallback((monthKey: string, keys: string[]) => {
+    if (keys.length === 0) return;
+    setPrefs((current) => ({
+      ...current,
+      appliedRecurring: {
+        ...current.appliedRecurring,
+        [monthKey]: Array.from(
+          new Set([...(current.appliedRecurring[monthKey] ?? []), ...keys]),
+        ),
+      },
+    }));
+  }, []);
 
   /* derived ------------------------------------------------------------- */
   const totals = useMemo(() => getTotals(data, activeMonth), [data, activeMonth]);
@@ -258,6 +335,7 @@ export function useKhata() {
     setDigitStyle,
     setTtsEnabled,
     setTtsRate,
+    markRecurringApplied,
     totals,
     monthOptions,
     breakdown,

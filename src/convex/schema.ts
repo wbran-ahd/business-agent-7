@@ -35,15 +35,11 @@ const schema = defineSchema(
       date: v.string(),
       time: v.string(),
       timestamp: v.number(),
-      /** Cash / JazzCash / EasyPaisa / bank. Absent on pre-account rows. */
-      account: v.optional(
-        v.union(
-          v.literal("cash"),
-          v.literal("jazzcash"),
-          v.literal("easypaisa"),
-          v.literal("bank"),
-        ),
-      ),
+      /**
+       * Cash or bank. Absent on pre-account rows; a legacy wallet value is read
+       * and normalized to `cash` by the client, never rejected.
+       */
+      account: v.optional(v.union(v.literal("cash"), v.literal("bank"))),
     }).index("by_user", ["userId"]),
 
     /**

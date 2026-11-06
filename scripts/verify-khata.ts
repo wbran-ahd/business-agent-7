@@ -39,6 +39,7 @@ import {
 } from "../src/lib/daybook";
 import {
   balanceLabel,
+  deletedPartyTotals,
   emptyPartyBook,
   makeParty,
   makePartyTxn,
@@ -46,9 +47,12 @@ import {
   outstandingTotals,
   partyBalance,
   partyBookFromJson,
+  partyAcceptsNewTxn,
   partyBookToJson,
+  partyKindForTxn,
   partySummary,
   reminderText,
+  stampPartyKind,
   whatsappUrl,
   type PartyBook,
   type PartyTxn,
@@ -518,6 +522,184 @@ section("daybook — opening, movements, cash/bank split");
     "account balances sum to the total",
     totalBalance(balances) === 1000 + 500 - 300 + 800 - 400,
     String(totalBalance(balances)),
+  );
+}
+
+section("party deletion keeps its accounting history (stage 4C-C)");
+{
+  const range = dayRange("2026-10-18");
+  const txn = (
+    id: number,
+    partyId: number,
+    kind: PartyTxn["kind"],
+    amount: number,
+    account: "cash" | "bank",
+    partyKind?: PartyTxn["partyKind"],
+  ): PartyTxn => ({
+    id,
+    partyId,
+    kind,
+    amount,
+    note: "",
+    account,
+    timestamp: range.start + 3_600_000,
+    date: "",
+    time: "",
+    ...(partyKind ? { partyKind } : {}),
+  });
+  const noData = (): DataState => ({ income: [], expense: [], undoStack: [] });
+  const customer = { id: 7, name: "علی", phone: "", kind: "customer" as const, createdAt: 0 };
+  const supplier = { id: 8, name: "حاجی ٹریڈرز", phone: "", kind: "supplier" as const, createdAt: 0 };
+
+  const before: PartyBook = {
+    parties: [customer, supplier],
+    txns: [
+      txn(20, 7, "charge", 5000, "cash", "customer"),
+      txn(21, 7, "payment", 800, "cash", "customer"),
+      txn(22, 8, "charge", 9000, "cash", "supplier"),
+      txn(23, 8, "payment", 400, "bank", "supplier"),
+    ],
+  };
+  const beforeDay = buildDaybook(noData(), before, "2026-10-18");
+  check(
+    "a live party's payment moves cash",
+    beforeDay.totalIn === 800 && beforeDay.totalOut === 400,
+    JSON.stringify({ in: beforeDay.totalIn, out: beforeDay.totalOut }),
+  );
+
+  /* Exactly what `removeParty` does now: stamp the kind on the entries, drop
+     only the party row, keep every entry. */
+  const after: PartyBook = {
+    parties: [],
+    txns: stampPartyKind(stampPartyKind(before.txns, 7, "customer"), 8, "supplier"),
+  };
+
+  const afterDay = buildDaybook(noData(), after, "2026-10-18");
+  check(
+    "deleting a party keeps its payments in the daybook",
+    afterDay.totalIn === 800 && afterDay.totalOut === 400 && afterDay.rows.length === 2,
+    JSON.stringify({ in: afterDay.totalIn, out: afterDay.totalOut, rows: afterDay.rows.length }),
+  );
+  check(
+    "deleting a party does not change historical cash",
+    afterDay.cashClosing === beforeDay.cashClosing &&
+      afterDay.cashOpening === beforeDay.cashOpening &&
+      afterDay.cashClosing === 800,
+    JSON.stringify({ before: beforeDay.cashClosing, after: afterDay.cashClosing }),
+  );
+  check(
+    "a deleted customer's receipt still reads as a receipt",
+    afterDay.rows.some(
+      (row) => row.label === "گاہک وصولی" && row.direction === "in" && row.amount === 800,
+    ),
+  );
+  check(
+    "a deleted supplier's payment still reads as a payment, never as income",
+    afterDay.rows.some(
+      (row) => row.label === "سپلائر ادائیگی" && row.direction === "out" && row.amount === 400,
+    ),
+  );
+  const afterBalances = accountBalances(noData(), after);
+  check(
+    "all-time cash is unchanged by the deletion",
+    afterBalances.find((row) => row.account === "cash")?.balance === 800,
+    String(afterBalances.find((row) => row.account === "cash")?.balance),
+  );
+
+  const liveTotals = outstandingTotals(before);
+  check(
+    "live outstanding totals still add up",
+    liveTotals.receivable === 4200 && liveTotals.payable === 8600,
+    JSON.stringify(liveTotals),
+  );
+  const activeTotals = outstandingTotals(after);
+  check(
+    "deleted parties are not mixed into the active outstanding summary",
+    activeTotals.receivable === 0 && activeTotals.payable === 0,
+    JSON.stringify(activeTotals),
+  );
+  const goneTotals = deletedPartyTotals(after);
+  check(
+    "outstanding debt survives the deletion in a separate calculation",
+    goneTotals.receivable === 4200 &&
+      goneTotals.payable === 8600 &&
+      goneTotals.parties === 2 &&
+      goneTotals.txns === 4,
+    JSON.stringify(goneTotals),
+  );
+  check(
+    "a deleted supplier's debt is never reported as a customer receivable",
+    goneTotals.payable === 8600 && goneTotals.receivable === 4200,
+    JSON.stringify(goneTotals),
+  );
+
+  const legacy: PartyBook = { parties: [], txns: [txn(30, 99, "charge", 3000, "cash")] };
+  const legacyGone = deletedPartyTotals(legacy);
+  check(
+    "a legacy entry with no party and no kind is never guessed as a receivable",
+    outstandingTotals(legacy).receivable === 0 &&
+      legacyGone.receivable === 0 &&
+      legacyGone.unclassified === 3000,
+    JSON.stringify(legacyGone),
+  );
+
+  check(
+    "the party row still wins over the stored kind (an edit is respected)",
+    partyKindForTxn(
+      txn(31, 7, "charge", 100, "cash", "customer"),
+      new Map<number, "customer" | "supplier">([[7, "supplier"]]),
+    ) === "supplier",
+  );
+
+  const roundTrip = partyBookFromJson(partyBookToJson(after));
+  check(
+    "a backup keeps the classification of a deleted party's history",
+    roundTrip.txns.length === 4 && roundTrip.txns.every((row) => row.partyKind !== undefined),
+    JSON.stringify(roundTrip.txns.map((row) => row.partyKind)),
+  );
+  const oldBackup = JSON.stringify({
+    version: 1,
+    parties: [],
+    txns: [
+      {
+        id: 40,
+        partyId: 8,
+        kind: "payment",
+        amount: 400,
+        note: "",
+        account: "bank",
+        timestamp: 1,
+        date: "",
+        time: "",
+      },
+    ],
+  });
+  const oldParsed = partyBookFromJson(oldBackup);
+  check(
+    "a backup written before this stage still loads",
+    oldParsed.txns.length === 1 && oldParsed.txns[0].partyKind === undefined,
+    JSON.stringify(oldParsed.txns[0] ?? null),
+  );
+  check(
+    "stamping the kind never overwrites one that is already set",
+    stampPartyKind([txn(41, 7, "payment", 5, "cash", "customer")], 7, "supplier")[0]
+      .partyKind === "customer",
+  );
+
+  check(
+    "a live party can receive a new entry",
+    partyAcceptsNewTxn(before.parties, 7, []) && partyAcceptsNewTxn(before.parties, 8, []),
+  );
+  check(
+    "a deleted party can never receive a new entry",
+    !partyAcceptsNewTxn(after.parties, 7, []) &&
+      !partyAcceptsNewTxn(after.parties, 8, []) &&
+      !partyAcceptsNewTxn(after.parties, 12345, []),
+  );
+  check(
+    "a remembered tombstone blocks an entry even while a stale row is still in memory",
+    partyAcceptsNewTxn(before.parties, 7, []) &&
+      !partyAcceptsNewTxn(before.parties, 7, [7]),
   );
 }
 

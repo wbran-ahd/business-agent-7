@@ -15,7 +15,7 @@ import {
   type DataState,
   type Entry,
 } from "./khata";
-import type { PartyBook, PartyTxn } from "./parties";
+import { partyKindForTxn, type PartyBook, type PartyTxn } from "./parties";
 
 export const ACCOUNT_IDS: AccountKind[] = ACCOUNT_CATALOG.map((a) => a.id);
 
@@ -136,9 +136,13 @@ export function buildDaybook(data: DataState, book: PartyBook, dateKey: string):
   ledgerPass(data.income, "in");
   ledgerPass(data.expense, "out");
 
+  /* Stage 4C-C: the party is looked up first (an edit wins), then the kind
+     stored on the entry. A deleted party's payment therefore keeps moving cash
+     exactly as it did before the deletion — deleting a party must not rewrite
+     history — and the row still reads as a receipt or a supplier payment. */
   const partyKinds = new Map(book.parties.map((party) => [party.id, party.kind]));
   for (const txn of book.txns) {
-    const partyKind = partyKinds.get(txn.partyId);
+    const partyKind = partyKindForTxn(txn, partyKinds);
     if (!partyKind) continue;
     const movement = partyCashMovement(txn, partyKind);
     if (!movement) continue;
@@ -209,7 +213,7 @@ export function accountBalances(data: DataState, book: PartyBook): AccountBalanc
 
   const kinds = new Map(book.parties.map((party) => [party.id, party.kind]));
   for (const txn of book.txns) {
-    const kind = kinds.get(txn.partyId);
+    const kind = partyKindForTxn(txn, kinds);
     if (!kind) continue;
     const movement = partyCashMovement(txn, kind);
     if (!movement) continue;
